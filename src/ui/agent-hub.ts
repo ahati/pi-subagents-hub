@@ -25,10 +25,10 @@ import type { Theme } from "./agent-widget.js";
 import { ConversationViewer } from "./conversation-viewer.js";
 import type { FleetWorkflow } from "./fleet-list.js";
 import {
-  hubAgents,
   hubEntryIndex,
   hubRunGroups,
   hubRunIndex,
+  hubScopeEntries,
   hubWorkflows,
 } from "./hub/hub-data.js";
 import { buildPageFooter } from "./hub/hub-footer.js";
@@ -109,18 +109,30 @@ export * from "./hub/hub-types.js";
 export async function openAgentHub(ui: HubUICtx, deps: AgentHubDeps, initial?: AgentHubInitial): Promise<undefined> {
   const target = initial?.agentId;
   const runTarget = initial?.runId;
-  const known = target != null && deps.manager.listAgents().some(a => a.id === target);
+  const allAgents = deps.manager.listAgents();
+  const known = target != null && allAgents.some(a => a.id === target);
   const runSource = runTarget != null ? deps.workflowRun?.(runTarget) : undefined;
   const run = runTarget != null ? hubWorkflows(deps).find(w => w.id === runTarget) : undefined;
+  const scopeStack: string[] = [];
+  if (known && target) {
+    const targetRec = allAgents.find(a => a.id === target);
+    if (targetRec?.parentAgentId) {
+      const parentRec = allAgents.find(a => a.id === targetRec.parentAgentId);
+      if (parentRec?.parentAgentId) {
+        scopeStack.push(parentRec.id);
+      }
+    }
+  }
   const resume: HubResumeState = {
     view: "table",
-    selected: Math.max(0, known ? hubEntryIndex(deps, target) : run ? hubRunIndex(deps, run.id) : 0),
+    selected: Math.max(0, known ? hubEntryIndex(deps, target, scopeStack.at(-1)) : run ? hubRunIndex(deps, run.id) : 0),
     filterText: "",
     page: runSource ? "W" : "R",
     focusId: known ? target : undefined,
     runId: runSource ? (run?.id ?? runTarget) : undefined,
     runItemSel: runSource ? currentPhaseIndex(hubRunGroups(deps, runTarget!)) : undefined,
     detailOpen: known ?? false,
+    scopeStack,
   };
   let popup = initial?.popup ?? (target != null || runTarget != null);
   for (;;) {
@@ -159,6 +171,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   private readonly tick: ReturnType<typeof setInterval>;
   private disposed = false;
   private mouseCaptured = false;
+  scopeStack: string[] = [];
 
   constructor(
     public tui: any,
@@ -181,6 +194,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     this.runItemSel = this.resume.runItemSel ?? 0;
     this.logScroll = this.resume.logScroll ?? 0;
     this.detailOpen = this.resume.detailOpen ?? false;
+    this.scopeStack = this.resume.scopeStack ? [...this.resume.scopeStack] : [];
     if (this.page === "R" && this.focusId !== undefined) {
       const record = this.deps.manager.listAgents().find(a => a.id === this.focusId);
       if (record?.session) this.ensureViewer(record);
@@ -223,6 +237,8 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     const items = this.entries();
     if (items.length > 0) {
       this.selected = Math.min(items.length - 1, Math.max(0, this.selected + Math.sign(delta) * steps));
+      const entry = items[this.selected];
+      this.focusId = entry?.kind === "agent" ? entry.record.id : undefined;
       this.stopArmed = false;
       this.requestRender();
     }
@@ -240,41 +256,100 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     }
   }
 
+  currentScopeId(): string | undefined {
+    return this.scopeStack.at(-1);
+  }
+
+  hasScope(): boolean {
+    return this.scopeStack.length > 0;
+  }
+
+  scopeRecord(): AgentRecord | undefined {
+    const id = this.currentScopeId();
+    return id ? this.deps.manager.listAgents().find(a => a.id === id) : undefined;
+  }
+
+  scopeParentName(): string | undefined {
+    const current = this.scopeRecord();
+    if (!current) return undefined;
+    if (this.scopeStack.length > 1) {
+      const parentId = this.scopeStack.at(-2);
+      const parent = parentId ? this.deps.manager.listAgents().find(a => a.id === parentId) : undefined;
+      return parent?.alias ?? parent?.handle ?? parent?.type ?? parent?.description;
+    }
+    const parent = current.parentAgentId
+      ? this.deps.manager.listAgents().find(a => a.id === current.parentAgentId)
+      : undefined;
+    return parent?.alias ?? parent?.handle ?? parent?.type ?? parent?.description ?? "roster";
+  }
+
+  canDrillDown(): boolean {
+    if (this.page !== "R") return false;
+    if (this.stackedMode() && this.detailOpen) return false;
+    const entry = this.entries()[this.selected];
+    return entry?.kind === "agent" && (entry.childCount ?? 0) > 0;
+  }
+
+  drillDown(): void {
+    if (!this.canDrillDown()) return;
+    const entry = this.entries()[this.selected];
+    if (entry?.kind !== "agent") return;
+    this.scopeStack.push(entry.record.id);
+    this.selected = 0;
+    this.focusId = entry.record.id;
+    this.stopArmed = false;
+    this.requestRender();
+  }
+
+  popScope(): void {
+    if (this.scopeStack.length === 0) return;
+    const popped = this.scopeStack.pop();
+    this.focusId = popped;
+    const items = this.entries();
+    const idx = items.findIndex(e => e.kind === "agent" && e.record.id === popped);
+    this.selected = idx !== -1 ? idx : 0;
+    this.stopArmed = false;
+    this.requestRender();
+  }
+
   private workflows(): FleetWorkflow[] {
     return hubWorkflows(this.deps);
   }
 
   private agentRecords(): AgentRecord[] {
-    return hubAgents(this.deps);
-  }
-
-  private roster(): HubEntry[] {
-    return [
-      ...this.workflows().map(workflow => ({ kind: "workflow" as const, workflow })),
-      ...this.agentRecords().map(record => ({ kind: "agent" as const, record })),
-    ];
+    return this.entries()
+      .filter((e): e is HubEntry & { kind: "agent" } => e.kind === "agent")
+      .map(e => e.record);
   }
 
   private activeFilter(): string {
     return this.filterInput ? this.filterInput.getValue() : this.filterText;
   }
 
-  private matchesFilter(entry: HubEntry): boolean {
-    const q = this.activeFilter().trim().toLowerCase();
-    if (!q) return true;
-    const hay = entry.kind === "workflow"
-      ? `${entry.workflow.name} workflow`
-      : `${entry.record.type} ${entry.record.alias ?? ""} ${entry.record.description}`;
-    return hay.toLowerCase().includes(q);
-  }
-
   entries(): HubEntry[] {
-    const matching = this.roster().filter(e => this.matchesFilter(e));
-    const agents = matching
-      .filter((e): e is HubEntry & { kind: "agent" } => e.kind === "agent")
-      .sort((a, b) => a.record.startedAt - b.record.startedAt);
-    const workflows = matching.filter((e): e is HubEntry & { kind: "workflow" } => e.kind === "workflow");
-    return [...agents, ...workflows];
+    const raw = hubScopeEntries(this.deps, this.currentScopeId());
+    const filter = this.activeFilter().trim().toLowerCase();
+    if (!filter) return raw;
+
+    const matching = new Set<string>();
+    for (const e of raw) {
+      if (e.kind === "agent") {
+        const hay = `${e.record.type} ${e.record.alias ?? ""} ${e.record.description}`.toLowerCase();
+        if (hay.includes(filter)) {
+          matching.add(e.record.id);
+          if (e.parentRecord) matching.add(e.parentRecord.id);
+        }
+      } else if (e.kind === "workflow") {
+        if (`${e.workflow.name} workflow`.toLowerCase().includes(filter)) {
+          matching.add(e.workflow.id);
+        }
+      }
+    }
+
+    return raw.filter(e => {
+      if (e.kind === "agent") return matching.has(e.record.id);
+      return matching.has(e.workflow.id);
+    });
   }
 
   handleInput(data: string): void {
@@ -322,6 +397,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     this.resume.runItemSel = this.runItemSel;
     this.resume.logScroll = this.logScroll;
     this.resume.detailOpen = this.detailOpen;
+    this.resume.scopeStack = [...this.scopeStack];
   }
 
   close(): void {
@@ -336,9 +412,12 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   }
 
   clampSelection(): void {
-    const max = Math.max(0, this.entries().length - 1);
+    const items = this.entries();
+    const max = Math.max(0, items.length - 1);
     if (this.selected > max) this.selected = max;
     if (this.selected < 0) this.selected = 0;
+    const entry = items[this.selected];
+    this.focusId = entry?.kind === "agent" ? entry.record.id : undefined;
   }
 
   openFilter(): void {
@@ -459,6 +538,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
       popup: this.popup,
       detailOpen: this.detailOpen,
       theme: this.theme,
+      scopeParentName: this.scopeParentName(),
     });
   }
 
@@ -519,20 +599,24 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
       const field = this.filterInput.render(Math.max(1, width - 2))[0] ?? "";
       return truncateToWidth(field + th.fg("dim", "  (Enter apply · Esc clear)"), width);
     }
-    const total = this.roster().length;
+    const total = hubScopeEntries(this.deps, this.currentScopeId()).length;
     const shown = this.entries().length;
     return truncateToWidth(th.fg("accent", `/ ${this.filterText}`) + th.fg("dim", `  — ${shown}/${total} match${shown === 1 ? "" : "es"}`), width);
   }
 
   private leftPaneLines(width: number, rows: number): WorkflowCardLine[] {
     const isPi = this.effectiveStyle() === "pi";
+    const scope = this.scopeRecord();
+    const scopeTitle = this.hasScope()
+      ? `${scope?.alias ?? scope?.handle ?? scope?.type ?? "scope"} (scope)`
+      : undefined;
     if (isPi && rows >= 3) {
       const titleLine = clampLine([{ text: "Agents & Workflows", bold: true }], width);
       const sepLine = clampLine([{ text: "─".repeat(width), color: "dim" }], width);
       const innerRows = rows - 2;
       const content = this.page === "WA" || this.page === "SAL" || this.page === "L"
         ? buildRunLeftLines(width, innerRows, this)
-        : buildRosterLines(width, innerRows, this.entries(), this.selected, this.activeFilter(), this.theme);
+        : buildRosterLines(width, innerRows, this.entries(), this.selected, this.activeFilter(), this.theme, scopeTitle);
       return [titleLine, sepLine, ...content];
     }
     switch (this.page) {
@@ -541,7 +625,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
       case "L":
         return buildRunLeftLines(width, rows, this);
       default:
-        return buildRosterLines(width, rows, this.entries(), this.selected, this.activeFilter(), this.theme);
+        return buildRosterLines(width, rows, this.entries(), this.selected, this.activeFilter(), this.theme, scopeTitle);
     }
   }
 
@@ -586,8 +670,12 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   }
 
   private stackedLines(width: number, rows: number): WindowRow[] {
+    const scope = this.scopeRecord();
+    const scopeTitle = this.hasScope()
+      ? `${scope?.alias ?? scope?.handle ?? scope?.type ?? "scope"} (scope)`
+      : undefined;
     const lines: PaneRow[] = this.page === "R"
-      ? (this.detailOpen ? this.rightPaneLines(width, rows) : buildRosterLines(width, rows, this.entries(), this.selected, this.activeFilter(), this.theme))
+      ? (this.detailOpen ? this.rightPaneLines(width, rows) : buildRosterLines(width, rows, this.entries(), this.selected, this.activeFilter(), this.theme, scopeTitle))
       : this.rightPaneLines(width, rows);
     const content = lines.length > 0 ? lines : this.leftPaneLines(width, rows);
     const padded = content.slice(0, rows);
@@ -652,12 +740,18 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   }
 
   agentIdentity(record: AgentRecord, width: number): WorkflowCardLine[] {
+    const parent = record.parentAgentId
+      ? this.deps.manager.listAgents().find(a => a.id === record.parentAgentId)
+      : undefined;
+    const parentName = this.page === "WA" || this.page === "SAL"
+      ? this.currentRun()?.name
+      : (parent?.alias ?? parent?.handle ?? parent?.type ?? parent?.description);
     return agentHeaderLines({
       record,
       activity: this.deps.agentActivity.get(record.id),
       width,
       th: this.theme,
-      parentName: this.page === "WA" || this.page === "SAL" ? this.currentRun()?.name : undefined,
+      parentName,
     });
   }
 

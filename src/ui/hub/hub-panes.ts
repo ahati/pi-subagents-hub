@@ -277,7 +277,24 @@ export function renderEntry(entry: HubEntry, selected: boolean, width: number, t
   const name = renderAgentRecordName(record, th, selected
     ? { fallbackColor: "text", bold: true }
     : { fallbackColor: "muted" });
-  return truncateToWidth(`${marker} ${glyph} ${name}`, width, "…");
+
+  if (entry.depth === 1) {
+    const branch = entry.isLastChild ? "└" : "├";
+    const prefix = `${marker} ${branch} ${glyph} `;
+    if (entry.childCount !== undefined && entry.childCount > 0) {
+      const counter = `↳${entry.childCount}`;
+      return finishRow(
+        `${prefix}${name}`,
+        visibleWidth(prefix),
+        selected ? th.fg("text", counter) : th.fg("dim", counter),
+        width,
+      );
+    }
+    return truncateToWidth(`${prefix}${name}`, width, "…");
+  }
+
+  const prefix = `${marker} ${glyph} `;
+  return truncateToWidth(`${prefix}${name}`, width, "…");
 }
 
 export function buildRosterLines(
@@ -287,6 +304,7 @@ export function buildRosterLines(
   selected: number,
   activeFilter: string,
   th: Theme,
+  scopeTitle?: string,
 ): WorkflowCardLine[] {
   if (items.length === 0) {
     return [clampLine([{ text: th.fg("dim", activeFilter ? "no matches" : "(no agents yet — spawn one to see it here)") }], width)];
@@ -295,7 +313,7 @@ export function buildRosterLines(
   const agents = items.filter((e): e is HubEntry & { kind: "agent" } => e.kind === "agent");
   const workflows = items.filter((e): e is HubEntry & { kind: "workflow" } => e.kind === "workflow");
   if (agents.length > 0) {
-    display.push({ kind: "header", label: ROSTER_SUBAGENTS_LABEL });
+    display.push({ kind: "header", label: scopeTitle ?? ROSTER_SUBAGENTS_LABEL });
     display.push(...agents);
   }
   if (workflows.length > 0) {
@@ -361,7 +379,8 @@ export function buildActivityLines(
       ? describeActivity(act.activeTools, act.responseText)
       : record.status === "running" ? "thinking…" : record.status;
     const turns = act?.maxTurns ? ` · turn ${act.turnCount}/${act.maxTurns}` : act ? ` · turn ${act.turnCount}` : "";
-    const line = `${statusGlyph(record.status, th)} ${renderAgentRecordName(record, th, {})}  ${th.fg(record.status === "running" ? "text" : "dim", doing)}${th.fg("dim", turns)}`;
+    const parentPrefix = entry.depth === 1 ? th.fg("dim", "↳ ") : "";
+    const line = `${statusGlyph(record.status, th)} ${parentPrefix}${renderAgentRecordName(record, th, {})}  ${th.fg(record.status === "running" ? "text" : "dim", doing)}${th.fg("dim", turns)}`;
     lines.push(fullRow(line));
   }
   return lines;

@@ -59,6 +59,11 @@ export interface AgentHubInputHost {
   selectedItemRecord(): AgentRecord | undefined;
   rosterRecordForCurrent(): AgentRecord | undefined;
   scrollLog(delta: number): void;
+  canDrillDown?(): boolean;
+  drillDown?(): void;
+  hasScope?(): boolean;
+  popScope?(): void;
+  scopeParentName?(): string | undefined;
 }
 
 export function dispatchHubInput(host: AgentHubInputHost, data: string): void {
@@ -75,14 +80,20 @@ export function dispatchHubInput(host: AgentHubInputHost, data: string): void {
   }
 
   if (matchesKey(data, "left")) {
-    if (host.page !== "R" || host.detailOpen) {
+    if (host.page !== "R" || host.detailOpen || host.hasScope?.()) {
       popPage(host);
       return;
     }
   }
-  if (matchesKey(data, "right") && (host.page === "W" || (host.page === "R" && (host.runRowSelected() || host.stackedMode())))) {
-    enterPage(host, host.entries());
-    return;
+  if (matchesKey(data, "right")) {
+    if (host.page === "R" && host.canDrillDown && host.canDrillDown()) {
+      host.drillDown?.();
+      return;
+    }
+    if (host.page === "W" || (host.page === "R" && (host.runRowSelected() || host.stackedMode()))) {
+      enterPage(host, host.entries());
+      return;
+    }
   }
 
   if (host.transcriptPage()) {
@@ -98,7 +109,8 @@ export function dispatchHubInput(host: AgentHubInputHost, data: string): void {
       return;
     }
     if (host.page === "R") {
-      if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "ctrl+c")) { popPage(host); return; }
+      if (matchesKey(data, "ctrl+c") || matchesKey(data, "q")) { host.close(); return; }
+      if (matchesKey(data, "escape")) { popPage(host); return; }
       if (matchesKey(data, "1")) { host.view = "table"; host.clampSelection(); host.requestRender(); return; }
       if (matchesKey(data, "2")) { host.view = "activity"; host.requestRender(); return; }
       if (matchesKey(data, "tab")) {
@@ -168,12 +180,16 @@ export function dispatchHubInput(host: AgentHubInputHost, data: string): void {
 
   if (matchesKey(data, "down")) {
     host.selected = Math.min(items.length - 1, host.selected + 1);
+    const entry = items[host.selected];
+    if (host.page === "R") host.focusId = entry?.kind === "agent" ? entry.record.id : undefined;
     host.stopArmed = false;
     host.requestRender();
     return;
   }
   if (matchesKey(data, "up")) {
     host.selected = Math.max(0, host.selected - 1);
+    const entry = items[host.selected];
+    if (host.page === "R") host.focusId = entry?.kind === "agent" ? entry.record.id : undefined;
     host.stopArmed = false;
     host.requestRender();
     return;
@@ -262,7 +278,14 @@ export function popPage(host: AgentHubInputHost): void {
     host.requestRender();
     return;
   }
-  if (host.page === "R") { host.close(); return; }
+  if (host.page === "R") {
+    if (host.hasScope?.()) {
+      host.popScope?.();
+      return;
+    }
+    host.close();
+    return;
+  }
   const from = host.page;
   host.page = PAGE_PARENT[from]!;
   host.logScroll = 0;
@@ -379,6 +402,10 @@ export function stopSelected(host: AgentHubInputHost, items: HubEntry[]): void {
 }
 
 export function pauseResumeAgent(host: AgentHubInputHost, record: AgentRecord): void {
+  if (record.parentAgentId !== undefined) {
+    host.deps.notify?.(`Cannot pause "${record.description}" — agents owned by another agent refuse to pause.`, "warning");
+    return;
+  }
   if (record.status === "running" || record.status === "queued") {
     const why = host.deps.pauseAgent?.(record.id);
     host.deps.notify?.(

@@ -11,6 +11,7 @@ check the entries below for behaviour changes.
 
 ### Fixed
 - **Global `/pause` and `/continue` now pause and resume workflow runs alongside agents.** `/pause` previously filtered for top-level subagents (`isTopLevelAgent`) and ignored running `SubagentWorkflow` tasks. It now parks active workflow tasks via `pauseWorkflowTask`, saves their execution state (script, journal path, args, tool call id) to the pause manifest, and notifies with the count of paused workflows. `/continue` resumes in-memory paused workflows via `resumeWorkflowTask` or relaunches them across process restarts using journal replay, clearing the manifest entry on completion ([#5](https://github.com/ahati/pi-subagents-hub/issues/5)).
+- **Agent-owned nested subagents are now visible and manageable in the hub UI.** The roster previously filtered for top-level agents only (`isTopLevelAgent`), hiding nested child subagents spawned by other agents. The hub now displays nested subagents in a hybrid 1-level hierarchy: immediate children render beneath their parent with `├`/`└` tree glyphs and 1-level indent, displaying their live transcript and identity upon selection, and accepting direct actions (`Enter` steer, `x` stop, `l` log, while `p` pause is refused with an honest notification). Deeper nesting (grandchildren and beyond) displays a delegation badge (`↳N`) flush right; pressing `→` drills down into that child's scope, while `←` or `Esc` ascends back up to the parent scope ([#4](https://github.com/ahati/pi-subagents-hub/issues/4)).
 
 ## [2026.10.17-r1] - 2026-10-17
 

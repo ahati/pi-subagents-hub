@@ -119,7 +119,14 @@ export const EMPTY_RUN_SOURCE: WorkflowDialogSource = {
 };
 
 export type WorkflowEntry = { kind: "workflow"; workflow: FleetWorkflow };
-export type AgentEntry = { kind: "agent"; record: AgentRecord };
+export type AgentEntry = {
+  kind: "agent";
+  record: AgentRecord;
+  depth?: number;
+  isLastChild?: boolean;
+  childCount?: number;
+  parentRecord?: AgentRecord;
+};
 export type HubEntry = WorkflowEntry | AgentEntry;
 
 export type HubRosterItem = { kind: "header"; label: string } | HubEntry;
@@ -188,6 +195,7 @@ export interface HubResumeState {
   runItemSel?: number;
   logScroll?: number;
   detailOpen?: boolean;
+  scopeStack?: string[];
 }
 
 export interface AgentHubInitial {

@@ -28,6 +28,7 @@ export interface PageFooterInput {
   popup: boolean;
   detailOpen: boolean;
   theme: Theme;
+  scopeParentName?: string;
 }
 
 export function buildPageFooter(input: PageFooterInput): string {
@@ -76,7 +77,7 @@ export function buildPageFooter(input: PageFooterInput): string {
   const right: FooterHint[] = [
     ...hints.map((text): FooterHint => ({ text, group: "hint" })),
     { text: `f ${popup ? "full" : "popup"}`, group: "hint" },
-    { text: `Esc ${detailOpen ? "roster" : keys.esc}`, group: "hint", pinned: true },
+    { text: `Esc ${detailOpen ? "roster" : (input.scopeParentName ?? keys.esc)}`, group: "hint", pinned: true },
   ];
 
   const band = footerBand({ width, left, right });

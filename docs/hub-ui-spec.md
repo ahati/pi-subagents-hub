@@ -272,6 +272,8 @@ right; the name truncates first, the counter survives. Glyphs: `●` running,
 is open or a filter is applied, a full-width filter row sits directly under the
 top edge — never a split row — and costs the body one row.
 
+Nested subagents: immediate children of an agent render directly beneath their parent with a 1-level tree indent (`├` / `└`) and can be selected, viewed, steered, stopped (`x`), and inspected (`l`) like any agent (nested agents refuse pause via `p` with an honest warning toast). Deeper nesting (depth ≥ 2) is indicated with a flush-right badge `↳N`; pressing `→` on that row drills down (resetting the roster view scoped to that child), and pressing `←` or `Esc` ascends back to the parent scope.
+
 **R1** is the selected subagent's **conversation itself** — the same blocks
 the run-agent page renders, from the same `ConversationViewer`: the header
 block, the header rule, then the transcript, tail-anchored, with the live `▍`
