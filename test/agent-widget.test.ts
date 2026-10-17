@@ -167,12 +167,22 @@ describe("createActivityTracker", () => {
     expect(state.toolUses).toBe(1);
   });
 
-  it("clears responseText when a new message starts", () => {
+  it("keeps the previous message's text until the next delta replaces it", () => {
     const { state, callbacks } = createActivityTracker();
     callbacks.onTextDelta("tail of the old message", "tail of the old message");
     expect(state.responseText).toBe("tail of the old message");
-    callbacks.onMessageStart();
-    expect(state.responseText).toBe("");
+    // The text is never cleared between messages — the last output line stays
+    // visible through the thinking window, per the spec and upstream behavior.
+    callbacks.onTextDelta("new", "new");
+    expect(state.responseText).toBe("new");
+  });
+
+  it("records the last completed tool call for between-message display", () => {
+    const { state, callbacks } = createActivityTracker();
+    callbacks.onToolActivity({ type: "start", toolName: "grep", toolCallId: "t9", args: { pattern: "maxTurns" } });
+    callbacks.onToolActivity({ type: "end", toolName: "grep", toolCallId: "t9" });
+    expect(state.lastTool).toEqual({ toolName: "grep", args: { pattern: "maxTurns" } });
+    expect(state.activeTools.size).toBe(0);
   });
 });
 

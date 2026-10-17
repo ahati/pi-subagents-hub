@@ -377,13 +377,12 @@ describe("the run's state mark and its item cursor", () => {
     expect(pane.match(/turn \d/g)?.length).toBe(1);
   });
 
-  it("between turns the tail falls back to the session's last output, like the main window's tree", () => {
-    // Nothing streams and no tool runs — and run-owned children get no
-    // activity tracker at all, which is the case that used to stick at
-    // "thinking…" or the session's OPENING line: the walk must reach past
-    // the last assistant text to the tool results, which are the freshest
-    // output while the next turn waits, and the turn count must come from
-    // the session too.
+  it("between turns the tail is the newest assistant line — never tool output", () => {
+    // Nothing streams and no tool runs. Tool OUTPUT must not become the tail
+    // (the grep-debris regression): the walk is assistant-only, so the newest
+    // narration wins, the older opener does not, and a child that has not
+    // narrated yet shows its last completed call (tracker) or thinking… —
+    // never `api.ts: 120 refs`.
     const h = harness(
       [
         makeRecord({
@@ -406,9 +405,10 @@ describe("the run's state mark and its item cursor", () => {
     h.press(DOWN);
     h.press("\r"); // page W
     const pane = runPane(h.frame());
-    // The LAST tool result's last line — not the opener, not "thinking…".
-    expect(pane).toContain("↳ api.ts: 120 refs");
+    // The NEWEST assistant line — not the opener, not the tool result, not "thinking…".
+    expect(pane).toContain("↳ Two files own the routes.");
     expect(pane).not.toContain("I'll start by");
+    expect(pane).not.toContain("api.ts: 120 refs");
     expect(pane).not.toContain("thinking…");
     // Two assistant messages → turn 2, derived where no tracker exists.
     expect(pane).toContain("turn 2");

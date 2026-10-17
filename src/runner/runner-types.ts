@@ -129,8 +129,6 @@ export interface RunOptions {
   configCwd?: string;
   /** Called on tool start/end with activity info. */
   onToolActivity?: (activity: ToolActivity) => void;
-  /** Called when a new assistant message starts, before any text streams. */
-  onMessageStart?: () => void;
   /** Called on streaming text deltas from the assistant response. */
   onTextDelta?: (delta: string, fullText: string) => void;
   onSessionCreated?: (session: AgentSession) => void;
@@ -217,7 +215,6 @@ export interface ResumeAgentOptions {
   /** Called at the end of each resumed turn with the count since the resume. */
   onTurnEnd?: (turnCount: number) => void;
   onToolActivity?: (activity: ToolActivity) => void;
-  onMessageStart?: () => void;
   onTextDelta?: (delta: string, fullText: string) => void;
   onAssistantUsage?: (usage: LifetimeUsage) => void;
   onCompaction?: (info: { reason: "manual" | "threshold" | "overflow"; tokensBefore: number }) => void;

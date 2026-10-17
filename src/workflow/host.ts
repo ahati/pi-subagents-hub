@@ -357,7 +357,6 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
               onToolActivity: tracker.callbacks.onToolActivity,
               onTextDelta: tracker.callbacks.onTextDelta,
               onTurnEnd: tracker.callbacks.onTurnEnd,
-              onMessageStart: tracker.callbacks.onMessageStart,
             } : {}),
             ...(request.schema !== undefined ? { structuredOutput: request.schema } : {}),
             ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
@@ -411,7 +410,6 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
               onToolActivity: tracker.callbacks.onToolActivity,
               onTextDelta: tracker.callbacks.onTextDelta,
               onTurnEnd: tracker.callbacks.onTurnEnd,
-              onMessageStart: tracker.callbacks.onMessageStart,
             })
           : manager.resume(id, prompt, deps.signal));
         if (record === undefined) {

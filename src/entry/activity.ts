@@ -24,6 +24,7 @@ export function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => 
     turnCount: 1,
     maxTurns,
     responseText: "",
+    lastTool: undefined,
     session: undefined,
   };
 
@@ -36,16 +37,15 @@ export function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => 
       } else if (activity.type === "end") {
         const key = activity.toolCallId
           ?? [...state.activeTools.entries()].find(([, call]) => call.toolName === activity.toolName)?.[0];
+        const call = key !== undefined ? state.activeTools.get(key) : undefined;
         if (key !== undefined) state.activeTools.delete(key);
+        // What the agent last did — shown between messages for agents that
+        // narrate little, instead of falling back to thinking… (#181).
+        state.lastTool = call ?? { toolName: activity.toolName };
         state.toolUses++;
       }
       // A "warning" probe (model-error/tools-error/extension-error) is a
       // one-shot diagnostic, not a tool use: nothing to paint, nothing to count.
-      onStreamUpdate?.();
-    },
-    onMessageStart: () => {
-      // A new message invalidates the old text: no previous-tail subtext before the first delta.
-      state.responseText = "";
       onStreamUpdate?.();
     },
     onTextDelta: (_delta: string, fullText: string) => {

@@ -63,6 +63,8 @@ export interface ActiveToolCall {
 /** Per-agent live activity state. */
 export interface AgentActivity {
   activeTools: Map<string, ActiveToolCall>;
+  /** The most recently completed call — shown between messages for quiet agents. */
+  lastTool?: ActiveToolCall;
   toolUses: number;
   responseText: string;
   session?: SessionLike;
@@ -277,9 +279,27 @@ function argHint(toolName: string, args: unknown): string | undefined {
   }
 }
 
+/** Tool name → past-tense action, for the last completed call. */
+const TOOL_PAST: Record<string, string> = {
+  read: "read",
+  bash: "ran command",
+  edit: "edited",
+  write: "wrote",
+  grep: "searched",
+  find: "found files",
+  ls: "listed",
+};
+
 /** One active call as a verb phrase: `editing src/foo.ts`, `running command`. */
 function describeToolCall(call: ActiveToolCall): string {
   const action = TOOL_DISPLAY[call.toolName] ?? call.toolName;
+  const hint = argHint(call.toolName, call.args);
+  return hint ? `${action} ${hint}` : action;
+}
+
+/** The last completed call, past tense: `read src/auth.ts`, `searched 'cleanup'`. */
+export function describeCompletedToolCall(call: ActiveToolCall): string {
+  const action = TOOL_PAST[call.toolName] ?? call.toolName;
   const hint = argHint(call.toolName, call.args);
   return hint ? `${action} ${hint}` : action;
 }

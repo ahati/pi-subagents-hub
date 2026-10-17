@@ -17,7 +17,7 @@ import {
   type WorkflowRunStatus,
 } from "../../workflow/progress.js";
 import type { ActiveToolCall, AgentActivity, Theme } from "../agent-widget.js";
-import { describeActivity } from "../agent-widget.js";
+import { describeActivity, describeCompletedToolCall } from "../agent-widget.js";
 import type { FleetWorkflow } from "../fleet-list.js";
 import { type WindowRow, windowRange } from "../window-frame.js";
 import { clampLine, type WorkflowCardLine } from "../workflow-card.js";
@@ -104,28 +104,21 @@ export function runAgentLive(
 }
 
 export function runAgentTail(record: AgentRecord | undefined, activity: AgentActivity | undefined): string {
+  // Upstream's invariant, restored: tool OUTPUT never reaches a status line —
+  // only tracker state (verbs, streamed text, last completed call) and, for
+  // records with no tracker (startup window, restored sessions), the newest
+  // assistant narration. thinking… means literally nothing has happened yet.
   const tools = activity?.activeTools ?? new Map<string, ActiveToolCall>();
   if (tools.size > 0) return describeActivity(tools, activity?.responseText);
   const streamed = lastContentfulLine(activity?.responseText ?? "");
   if (streamed) return streamed;
-  // Between turns (or untracked) — walk the transcript newest-first. An
-  // assistant message contributes its last contentful line; a tool result its
-  // first (the head names what it did — the tail is whatever the output ended
-  // on: `}` of pretty-printed JSON, a truncation marker, a frame).
+  if (activity?.lastTool) return describeCompletedToolCall(activity.lastTool);
   const messages = record?.session?.messages ?? [];
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (message.role !== "assistant" && message.role !== "toolResult") continue;
-    const text = extractText(message.content as unknown[]);
-    if (message.role === "assistant") {
-      const line = lastContentfulLine(text);
-      if (line) return line;
-    } else {
-      for (const line of text.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed && /\w/.test(trimmed) && !trimmed.startsWith("```")) return trimmed;
-      }
-    }
+    if (message.role !== "assistant") continue;
+    const line = lastContentfulLine(extractText(message.content as unknown[]));
+    if (line) return line;
   }
   return "thinking…";
 }

@@ -122,7 +122,7 @@ describe("workflow child activity tracking", () => {
 describe("runAgentTail extraction", () => {
   const msg = (role: string, text: string) => ({ role, content: [{ type: "text", text }] });
 
-  it("between turns, a tracked agent falls back to the transcript like an untracked one", () => {
+  it("between turns, a tracked agent keeps its newest narration — never the tool output", () => {
     const activity: AgentActivity = {
       activeTools: new Map(),
       toolUses: 1,
@@ -130,10 +130,22 @@ describe("runAgentTail extraction", () => {
       turnCount: 2,
     };
     const record = { session: { messages: [msg("assistant", "old narration"), msg("toolResult", "json output\n}")] } };
-    expect(runAgentTail(record as any, activity)).toBe("json output");
+    expect(runAgentTail(record as any, activity)).toBe("old narration");
   });
 
-  it("shows the newest message's line — narration when the agent spoke last", () => {
+  it("a tracked agent with no narration shows its last completed call, past tense", () => {
+    const activity: AgentActivity = {
+      activeTools: new Map(),
+      lastTool: { toolName: "grep", args: { pattern: "max turns" } },
+      toolUses: 3,
+      responseText: "",
+      turnCount: 2,
+    };
+    const record = { session: { messages: [msg("toolResult", "src/runner/extension-scope.ts:23:export function extensionCanonicalName(extPath: string): string {")] } };
+    expect(runAgentTail(record as any, activity)).toBe("searched 'max turns'");
+  });
+
+  it("shows the newest assistant line when the agent spoke last", () => {
     const record = { session: { messages: [msg("toolResult", "{\n  \"key\": \"value\"\n}"), msg("assistant", "Reading the config now.")] } };
     expect(runAgentTail(record as any, undefined)).toBe("Reading the config now.");
   });
@@ -143,14 +155,20 @@ describe("runAgentTail extraction", () => {
     expect(runAgentTail(record as any, undefined)).toBe("\"summary\": \"all green\"");
   });
 
-  it("extracts a contentful line from tool output, skipping JSON braces", () => {
+  it("tool output never becomes the tail, even with no narration after it", () => {
     const record = { session: { messages: [msg("assistant", "Checking the config."), msg("toolResult", "{\n  \"key\": \"value\"\n}")] } };
-    expect(runAgentTail(record as any, undefined)).toBe("\"key\": \"value\"");
+    expect(runAgentTail(record as any, undefined)).toBe("Checking the config.");
   });
 
-  it("falls back to the tool result's first contentful line, not its last", () => {
-    const record = { session: { messages: [msg("toolResult", "src/auth.ts\nsrc/session.ts\n(truncated)")] } };
-    expect(runAgentTail(record as any, undefined)).toBe("src/auth.ts");
+  it("a transcript with only tool results and no tracker shows thinking…, not grep debris", () => {
+    const record = { session: { messages: [msg("toolResult", "--- exports ---\n30:const RESERVED_IN_TYPE = \":\";"), msg("toolResult", "src/auth.ts\nsrc/session.ts\n(truncated)")] } };
+    expect(runAgentTail(record as any, undefined)).toBe("thinking…");
+  });
+
+  it("keeps showing the agent's last narration while it composes the next message", () => {
+    const activity: AgentActivity = { activeTools: new Map(), toolUses: 1, responseText: "Files read in full (43 + 182 + 297 = 522 lines).", turnCount: 3 };
+    const record = { session: { messages: [msg("assistant", "Files read in full (43 + 182 + 297 = 522 lines).")] } };
+    expect(runAgentTail(record as any, activity)).toBe("Files read in full (43 + 182 + 297 = 522 lines).");
   });
 
   it("the agent log's note line shows the latest line, not the first", () => {

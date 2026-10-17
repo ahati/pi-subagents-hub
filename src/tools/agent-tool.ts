@@ -301,7 +301,6 @@ export function createAgentTool(deps: AgentToolDeps) {
             maxTurns: resumeMaxTurns,
             onTurnEnd: resumeCallbacks.onTurnEnd,
             onToolActivity: resumeCallbacks.onToolActivity,
-            onMessageStart: resumeCallbacks.onMessageStart,
           });
         } finally {
           agentActivity.delete(existing.id);

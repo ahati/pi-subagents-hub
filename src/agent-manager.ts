@@ -299,7 +299,6 @@ export class AgentManager {
       },
       onTurnEnd: options.onTurnEnd,
       onTextDelta: options.onTextDelta,
-      onMessageStart: options.onMessageStart,
       onAssistantUsage: (usage) => {
         addUsage(record.lifetimeUsage, usage);
         this.onUsage?.(record, usage);

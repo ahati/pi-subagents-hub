@@ -252,7 +252,6 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
       maxTurns: opts.maxTurns,
       onTurnEnd: bgCallbacks.onTurnEnd,
       onToolActivity: bgCallbacks.onToolActivity,
-      onMessageStart: bgCallbacks.onMessageStart,
       onAssistantUsage: bgCallbacks.onAssistantUsage,
       onStarted: () => {
         const rec = manager.getRecord(id);
