@@ -39,6 +39,8 @@ const TOOL_DISPLAY: Record<string, string> = {
 export type Theme = {
   fg(color: string, text: string): string;
   bold(text: string): string;
+  bg?(color: string, text: string): string;
+  getBgAnsi?(color: string): string;
 };
 
 export type UICtx = {
