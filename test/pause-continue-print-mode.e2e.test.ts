@@ -18,12 +18,14 @@
  * The disk is the assertion surface: the manifest, the child session file's
  * content before and after the continuation, and the parent's follow-up turn.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fauxText, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PauseStore, resolvePauseStorePath } from "../src/pause-store.js";
+import { readJournal } from "../src/workflow/journal.js";
 import { agentCall, conversationText, routeBySession, runPrintMode, toolResultsNamed } from "./helpers/print-mode-runner.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -41,6 +43,9 @@ async function waitFor(what: () => boolean, ms = 10_000): Promise<void> {
 function countMessages(text: string, role: string): number {
   return (text.match(new RegExp(`"role":"${role}"`, "g")) ?? []).length;
 }
+
+/** Everything the faux backend was asked, flattened for substring checks. */
+const asText = (context: { messages?: unknown[] }) => JSON.stringify(context.messages ?? []);
 
 describe("/pause → quit → reload → /continue (real pi sessions, faux model)", () => {
   let cwd: string;
@@ -155,6 +160,317 @@ describe("/pause → quit → reload → /continue (real pi sessions, faux model
       }
     } finally {
       releaseChild();
+      await run1.dispose().catch(() => {});
+    }
+  });
+
+  it("parks a multi-step workflow mid-run, survives shutdown, and continues from journal replay after reload", async () => {
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ workflowsEnabled: true }));
+
+    const script = [
+      'export const meta = { name: "test-multistep", description: "two-step pipeline" };',
+      'const r1 = await agent("STEP1_WORK", { label: "one" });',
+      'const r2 = await agent("STEP2_WORK", { label: "two" });',
+      'return [r1, r2];',
+    ].join("\n");
+
+    let releaseChild2!: () => void;
+    const child2Held = new Promise<string>(resolve => {
+      releaseChild2 = () => resolve("LATE_ANSWER");
+    });
+
+    const child1Seen: string[] = [];
+    const child2Seen: string[] = [];
+
+    const run1 = await runPrintMode({
+      live: false,
+      cwd,
+      prompt: "start workflow",
+      hold: false,
+      maxModelCalls: 32,
+      sessionManager: SessionManager.create(cwd, sessionDir),
+      respond: context => {
+        const isParent = getCurrentTools(context.messages).some(t => t.name === "SubagentWorkflow");
+        if (isParent) {
+          return asText(context).includes("Task ID")
+            ? fauxText("workflow launched")
+            : fauxToolCall("SubagentWorkflow", { script });
+        }
+        const txt = asText(context);
+        if (txt.includes("STEP1_WORK")) {
+          child1Seen.push(txt);
+          return fauxText("RESULT_STEP_1");
+        }
+        if (txt.includes("STEP2_WORK")) {
+          child2Seen.push(txt);
+          return child2Held;
+        }
+        return fauxText("unexpected child");
+      },
+    });
+
+    try {
+      // Wait until step 1 completed and step 2 is in-flight.
+      await waitFor(() => child1Seen.length > 0 && child2Seen.length > 0);
+
+      const sessionId1 = run1.parentSession.sessionManager.getSessionId();
+      const parentSessionFile = run1.parentSession.sessionManager.getSessionFile();
+      const manifestPath = resolvePauseStorePath(cwd, sessionId1);
+
+      // Issue /pause while step 2 is mid-execution.
+      await run1.parentSession.prompt("/pause");
+
+      // Verify the workflow was parked and journal recorded step 1.
+      const wfEntries = new PauseStore(manifestPath).listWorkflows();
+      expect(wfEntries).toHaveLength(1);
+      expect(wfEntries[0].script).toContain("test-multistep");
+      expect(existsSync(wfEntries[0].journalPath)).toBe(true);
+
+      const journal = readJournal(wfEntries[0].journalPath);
+      expect(journal).toHaveLength(1);
+      expect(journal[0].ok).toBe(true);
+      expect(journal[0].text).toBe("RESULT_STEP_1");
+
+      // Settle held child and quit session.
+      releaseChild2();
+      await run1.dispose();
+
+      // Quit must preserve the parked workflow manifest on disk.
+      expect(new PauseStore(manifestPath).listWorkflows()).toHaveLength(1);
+
+      // --- run 2: fresh boot, reload session, /continue ---
+      const childRun2Seen: string[] = [];
+
+      const run2 = await runPrintMode({
+        live: false,
+        cwd,
+        prompt: "/continue",
+        hold: false,
+        maxModelCalls: 32,
+        sessionManager: SessionManager.open(parentSessionFile, sessionDir),
+        respond: context => {
+          const isParent = getCurrentTools(context.messages).some(t => t.name === "SubagentWorkflow");
+          if (isParent) {
+            return "Acknowledged.";
+          }
+          const txt = asText(context);
+          childRun2Seen.push(txt);
+          if (txt.includes("STEP1_WORK")) {
+            return fauxText("UNEXPECTED_STEP1_RERUN");
+          }
+          if (txt.includes("STEP2_WORK")) {
+            return fauxText("RESULT_STEP_2");
+          }
+          return fauxText("other child");
+        },
+      });
+
+      try {
+        // Manifest must be cleared once /continue relaunches the workflow.
+        await waitFor(() => new PauseStore(manifestPath).listWorkflows().length === 0);
+
+        // Wait for step 2 to complete live in run 2.
+        await waitFor(() => childRun2Seen.some(p => p.includes("STEP2_WORK")));
+
+        // Step 1 MUST NOT have been invoked again (replayed from journal cache).
+        expect(childRun2Seen.some(p => p.includes("STEP1_WORK"))).toBe(false);
+        // Step 2 MUST have been invoked live against the model.
+        expect(childRun2Seen.some(p => p.includes("STEP2_WORK"))).toBe(true);
+
+        // Completion notification reached the parent session.
+        await waitFor(() =>
+          conversationText(run2.parentSession).includes("test-multistep") ||
+          conversationText(run2.parentSession).includes("RESULT_STEP_2") ||
+          conversationText(run2.parentSession).includes("Acknowledged."),
+        );
+      } finally {
+        await run2.dispose();
+      }
+    } finally {
+      releaseChild2();
+      await run1.dispose().catch(() => {});
+    }
+  });
+
+  it("exercises RPC endpoint spawn, ownership refusal on workflow child, pause, quit, continue, and consume", async () => {
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ workflowsEnabled: true }));
+
+    const wfScript = [
+      'export const meta = { name: "wf-rpc", description: "rpc workflow" };',
+      'const res = await agent("WF_CHILD_TASK");',
+      'return res;',
+    ].join("\n");
+
+    let releaseAgent!: () => void;
+    const agentHeld = new Promise<string>(resolve => {
+      releaseAgent = () => resolve("rpc agent finished");
+    });
+    let releaseWfChild!: () => void;
+    const wfChildHeld = new Promise<string>(resolve => {
+      releaseWfChild = () => resolve("wf child finished");
+    });
+
+    let rpcAgentSeen = false;
+    let wfSeen = false;
+
+    const run1 = await runPrintMode({
+      live: false,
+      cwd,
+      prompt: "orchestrator start",
+      hold: false,
+      maxModelCalls: 32,
+      sessionManager: SessionManager.create(cwd, sessionDir),
+      respond: context => {
+        const isParent = getCurrentTools(context.messages).some(t => t.name === "SubagentWorkflow");
+        if (isParent) {
+          const txt = asText(context);
+          if (txt.includes("run the workflow")) {
+            return txt.includes("Task ID")
+              ? fauxText("wf started")
+              : fauxToolCall("SubagentWorkflow", { script: wfScript });
+          }
+          return fauxText("ready");
+        }
+        const txt = asText(context);
+        if (txt.includes("RPC_TASK_PROMPT")) {
+          rpcAgentSeen = true;
+          return agentHeld;
+        }
+        if (txt.includes("WF_CHILD_TASK")) {
+          wfSeen = true;
+          return wfChildHeld;
+        }
+        return "child done";
+      },
+    });
+
+    try {
+      const bus = run1.eventBus;
+      function rpcCall<T = any>(channel: string, payload: any): Promise<T> {
+        return new Promise((resolve, reject) => {
+          const reqId = payload.requestId ?? `req-${Math.random().toString(36).slice(2)}`;
+          payload.requestId = reqId;
+          const unsub = bus.on(`${channel}:reply:${reqId}`, (reply: any) => {
+            unsub();
+            if (reply.success) resolve(reply.data);
+            else reject(new Error(reply.error));
+          });
+          bus.emit(channel, payload);
+        });
+      }
+
+      // 1. Verify RPC ping returns capabilities.
+      const ping = await rpcCall<{ version: number; capabilities: string[] }>("subagents:rpc:ping", {});
+      expect(ping.version).toBe(2);
+      expect(ping.capabilities).toEqual(["spawn", "stop", "pause", "resume", "consume", "steer"]);
+
+      // 2. Spawn an agent via RPC endpoint.
+      const spawnReply = await rpcCall<{ id: string }>("subagents:rpc:spawn", {
+        type: "general-purpose",
+        prompt: "RPC_TASK_PROMPT",
+        options: { description: "rpc spawned agent", isBackground: true },
+      });
+      const rpcAgentId = spawnReply.id;
+      expect(rpcAgentId).toBeTruthy();
+
+      // 3. Dispatch workflow via prompt.
+      await run1.parentSession.prompt("run the workflow");
+
+      // Wait for both RPC agent and workflow to be running in-flight.
+      await waitFor(() => rpcAgentSeen && wfSeen);
+
+      // Verify RPC pause rejection on an unknown agent.
+      await expect(
+        rpcCall("subagents:rpc:pause", { agentId: "nonexistent-agent" }),
+      ).rejects.toThrow("Agent not found");
+
+      // 4. Issue global /pause: both the RPC-spawned agent and the workflow run are paused.
+      await run1.parentSession.prompt("/pause");
+
+      const sessionId1 = run1.parentSession.sessionManager.getSessionId();
+      const parentSessionFile = run1.parentSession.sessionManager.getSessionFile();
+      const manifestPath = resolvePauseStorePath(cwd, sessionId1);
+
+      const store = new PauseStore(manifestPath);
+      const rpcEntry = store.list().find(e => e.id === rpcAgentId);
+      expect(rpcEntry).toBeDefined();
+      const rpcSessionFile = rpcEntry!.sessionFile;
+      expect(rpcSessionFile).toBeTruthy();
+      expect(store.listWorkflows()).toHaveLength(1);
+
+      // Release held model promises and quit session.
+      releaseAgent();
+      releaseWfChild();
+      await run1.dispose();
+
+      // 5. Reload session, run /continue: both RPC agent and workflow resume and complete.
+      const run2 = await runPrintMode({
+        live: false,
+        cwd,
+        prompt: "/continue",
+        hold: false,
+        maxModelCalls: 32,
+        sessionManager: SessionManager.open(parentSessionFile, sessionDir),
+        respond: context => {
+          const isParent = getCurrentTools(context.messages).some(t => t.name === "SubagentWorkflow");
+          if (isParent) return "Noted.";
+          return fauxText("resumed task finished");
+        },
+      });
+
+      try {
+        const bus2 = run2.eventBus;
+
+        // Wait for manifest to clear.
+        await waitFor(
+          () =>
+            new PauseStore(manifestPath).list().length === 0 &&
+            new PauseStore(manifestPath).listWorkflows().length === 0,
+        );
+
+        // Wait for RPC agent to complete its resumed turn on disk.
+        await waitFor(() => readFileSync(rpcSessionFile!, "utf-8").includes("resumed task finished"));
+
+        // Wait for revived agent record in manager to settle.
+        await waitFor(() => {
+          const r = run2.manager?.getRecord(rpcEntry.handle!);
+          return r !== undefined && (r.status === "completed" || r.result !== undefined);
+        });
+
+        const revived = run2.manager?.getRecord(rpcEntry.handle!);
+        expect(revived).toBeDefined();
+        const revivedAgentId = revived!.id;
+        expect(revivedAgentId).toBeTruthy();
+
+        // 6. Test subagents:rpc:consume on the finished RPC agent.
+        function rpcCall2<T = any>(channel: string, payload: any): Promise<T> {
+          return new Promise((resolve, reject) => {
+            const reqId = payload.requestId ?? `req-${Math.random().toString(36).slice(2)}`;
+            payload.requestId = reqId;
+            const unsub = bus2.on(`${channel}:reply:${reqId}`, (reply: any) => {
+              unsub();
+              if (reply.success) resolve(reply.data);
+              else reject(new Error(reply.error));
+            });
+            bus2.emit(channel, payload);
+          });
+        }
+
+        // Consuming the result succeeds (can consume by @handle or by revived id).
+        await rpcCall2("subagents:rpc:consume", { agentId: `@${rpcEntry.handle}` });
+
+        // Consuming an unknown agent fails with "Agent not found or still running".
+        await expect(
+          rpcCall2("subagents:rpc:consume", { agentId: "nonexistent-agent" }),
+        ).rejects.toThrow(/Agent not found or still running/);
+      } finally {
+        await run2.dispose();
+      }
+    } finally {
+      releaseAgent();
+      releaseWfChild();
       await run1.dispose().catch(() => {});
     }
   });

@@ -513,7 +513,10 @@ export async function continueParkedMainTurn(
               /* stale ctx after replacement */
             }
           };
-          const freshRegistry = (globalThis as any)[MANAGER_KEY] as { revivePausedEntry?: (c: ExtensionContext, e: PausedAgentEntry) => Promise<"resumed" | "respawned" | "stale" | "failed"> } | undefined;
+          const freshRegistry = (globalThis as any)[MANAGER_KEY] as {
+            revivePausedEntry?: (c: ExtensionContext, e: PausedAgentEntry) => Promise<"resumed" | "respawned" | "stale" | "failed">;
+            relaunchPausedWorkflow?: (c: ExtensionContext, e: PausedWorkflowEntry) => Promise<boolean>;
+          } | undefined;
           const revive = freshRegistry?.revivePausedEntry ?? (fresh ? undefined : (c: ExtensionContext, e: PausedAgentEntry) => continuePausedEntry(c, e, deps));
           if (!revive) {
             notify("Could not revive the parked agents — pi-subagents-hub is not active in the resumed session.", "warning");
@@ -529,8 +532,25 @@ export async function continueParkedMainTurn(
               if (outcome !== "resumed" && outcome !== "respawned") failed.push(entry);
             }
           }
+          const relaunchWf = freshRegistry?.relaunchPausedWorkflow ?? (fresh ? undefined : (c: ExtensionContext, e: PausedWorkflowEntry) => deps.relaunchWorkflow ? deps.relaunchWorkflow(c, e) : Promise.resolve(false));
+          const workflowEntries = store.listWorkflows();
+          const failedWorkflows: PausedWorkflowEntry[] = [];
+          if (!relaunchWf && workflowEntries.length > 0) {
+            notify("Could not continue the workflow runs — pi-subagents-hub is not active in the resumed session.", "warning");
+            for (const wf of workflowEntries) failedWorkflows.push(wf);
+          } else {
+            for (const wf of workflowEntries) {
+              let ok = false;
+              try {
+                ok = (await relaunchWf?.(runCtx, wf)) ?? false;
+              } catch (err) {
+                notify(`Could not continue workflow run: ${err instanceof Error ? err.message : String(err)}`, "warning");
+              }
+              if (!ok) failedWorkflows.push(wf);
+            }
+          }
           store.setMainTurn(undefined);
-          store.replace(failed);
+          store.replaceBoth(failed, failedWorkflows);
         },
       });
     } finally {

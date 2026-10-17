@@ -66,6 +66,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { EventBus } from "../../src/cross-extension-rpc.js";
 import { fauxModelBackend } from "./faux-model-backend.js";
 import { getModel, registerFauxProvider } from "./pi-ai.js";
 
@@ -172,6 +173,8 @@ export interface PrintModeRun {
   subagents: Array<Record<string, unknown>>;
   /** Faux model call count (0 in live mode). */
   modelCalls: number;
+  /** Event bus for cross-extension RPC communication. */
+  eventBus: EventBus;
   /**
    * Tear down: emit session_shutdown (so extensions clear timers), dispose the
    * session, unregister faux, restore cwd/env, rm temp dir. Async — await it.
@@ -530,6 +533,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     manager,
     subagents,
     modelCalls: faux?.state.callCount ?? 0,
+    eventBus: loader.eventBus,
     dispose,
   };
 }

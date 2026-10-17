@@ -278,7 +278,8 @@ export default function (pi: ExtensionAPI) {
   const resolveAgentRef = (ref: string): AgentRecord | undefined => {
     const byId = manager.getRecord(ref);
     if (byId) return byId;
-    const resolved = manager.resolveMention(ref);
+    const clean = ref.replace(/^@/, "");
+    const resolved = manager.resolveMention(clean);
     return resolved?.kind === "live" ? resolved.record : undefined;
   };
 
@@ -287,10 +288,12 @@ export default function (pi: ExtensionAPI) {
     hasRunning: () => manager.hasRunning(),
     spawn: spawnTopLevel,
     getRecord: (id: string) => {
-      const record = manager.getRecord(id);
+      const record = resolveAgentRef(id);
       return record !== undefined && isTopLevelAgent(record) ? record : undefined;
     },
     revivePausedEntry: (ctx: ExtensionContext, entry: any) => continuePausedEntry(ctx, entry, pauseDeps),
+    relaunchPausedWorkflow: (ctx: ExtensionContext, entry: any) =>
+      pauseDeps.relaunchWorkflow ? pauseDeps.relaunchWorkflow(ctx, entry) : Promise.resolve(false),
   };
   const ownsManagerRegistry = (globalThis as any)[MANAGER_KEY] === undefined;
   if (ownsManagerRegistry) {

@@ -472,11 +472,23 @@ describe("post-restart /continue wiring", () => {
     return resolvePauseStorePath(process.cwd(), sessionId);
   }
 
-  /** Write a v2 manifest by hand — the shape a previous process left behind. */
-  function seedManifest(mainTurn: Record<string, unknown> | undefined, entries: unknown[], sessionId = "s1"): string {
+  /** Write a v3 manifest by hand — the shape a previous process left behind. */
+  function seedManifest(
+    mainTurn: Record<string, unknown> | undefined,
+    entries: unknown[],
+    sessionId = "s1",
+    workflows?: unknown[],
+  ): string {
     const file = manifestPath(sessionId);
     mkdirSync(join(file, ".."), { recursive: true });
-    writeFileSync(file, JSON.stringify({ version: 2, entries, ...(mainTurn ? { mainTurn } : {}) }, null, 2));
+    writeFileSync(
+      file,
+      JSON.stringify(
+        { version: 3, entries, ...(mainTurn ? { mainTurn } : {}), ...(workflows ? { workflows } : {}) },
+        null,
+        2,
+      ),
+    );
     return file;
   }
 
@@ -647,6 +659,37 @@ describe("post-restart /continue wiring", () => {
     const onDisk = manifestOnDisk();
     expect(onDisk?.mainTurn, "mainTurn must be cleared once the parked turn was continued").toBeUndefined();
     expect(onDisk?.entries ?? []).toEqual([]);
+  });
+
+  it("clears mainTurn, entries, and relaunches workflows after a successful /continue", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false, workflowsEnabled: true } });
+    const mainSessionFile = seedMainSession(hermetic.dir);
+    const agentSessionFile = join(hermetic.dir, "agent-session.jsonl");
+    writeFileSync(agentSessionFile, "");
+    const journalPath = join(hermetic.dir, "test.workflow.jsonl");
+    writeFileSync(journalPath, '{"index":0,"key":"k0","ok":true,"text":"res"}\n');
+    const wfEntry = {
+      id: "wf_1",
+      journalPath,
+      script: 'export const meta = { name: "wf-main", description: "wf description" }; await agent("held"); return 1;',
+      pausedAt: ts,
+    };
+    seedManifest(parkedMainTurn(), [entryFor(agentSessionFile)], "s1", [wfEntry]);
+
+    const b = bootOnly();
+    heldRevive();
+    const cmdCtx = continueCtx(mainSessionFile);
+    await b.commands.get("continue").handler("", cmdCtx);
+    await flush();
+
+    expect(cmdCtx.switchSession, "the parked main turn must be continued").toHaveBeenCalledWith(
+      mainSessionFile,
+      expect.anything(),
+    );
+    const onDisk = manifestOnDisk();
+    expect(onDisk?.mainTurn, "mainTurn must be cleared once the parked turn was continued").toBeUndefined();
+    expect(onDisk?.entries ?? []).toEqual([]);
+    expect(onDisk?.workflows ?? []).toEqual([]);
   });
 
   it("replace([]) from the settle funnel preserves a landed mainTurn", async () => {
