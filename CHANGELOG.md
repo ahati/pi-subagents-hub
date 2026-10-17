@@ -9,6 +9,8 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+## [2026.10.17-r1] - 2026-10-17
+
 ### Added
 - **Pi-native UI style for overlay windows and status bar.** Window frames in the agent hub and conversation viewer render with edge-to-edge rules without outer side rails (`│`) or rounded box corners (`╭`, `╮`, `╰`, `╯`) to align with Pi's native chrome conventions, fullscreen overlays pin flush to terminal edges without top/bottom row gaps, active roster selections use Pi's native `selectedBg` token across pane cells, and the status bar displays themed accent spinners and dim labels in Pi's footer. Configurable via `uiStyle: "pi" | "claude"` in `subagents.json` or `/agents → Settings → UI style` (defaults to `"pi"`), with `"claude"` style preserving Claude Code-compatible rounded boxes and plain text status.
 
@@ -17,7 +19,6 @@ check the entries below for behaviour changes.
 - **The activity subtext names what a running tool call touches, and keeps the last output line between turns.** The `⎿` line on the agents widget, the foreground `Agent` row and the hub read `editing src/auth.ts` or `searching 'cleanup'` instead of a bare count (`reading 2 files…`); commands stay generic (`running command`) — a truncated fragment of a real command line reads as noise.: `observeRun` now forwards pi's `tool_execution_start` args, the activity tracker keys calls by `toolCallId` (so parallel same-tool calls can no longer pin a verb forever), and distinct calls render as up to three phrases with a `+N more` tail.
 
 ## [2026.10.16-r1] - 2026-10-16
-
 ### Added
 - **A parked workflow run's agents now say so.** The run row read `‖ paused`, but the agents it owns kept rendering as a live spinner — `WorkflowDisplayState` had no `paused` member and the hub treated a parked run as active, so an owned agent was indistinguishable from one of a healthy run. `displayState` now takes the owning run's status and derives `paused` for every row a parked run owns that has not settled (`‖` dim plus a `run paused` annotation, with a queued row's `waiting` clock kept); the run log says `still running (run paused)`, the run pages' live tail and copy/pause subject keep working through a park, and the `↳` line's in-flight count includes paused rows. Skip/retry stay offered during a park, as before. Whether pausing a run should suspend its in-flight agents remains a separate question — this is the readable state only ([#3](https://github.com/ahati/pi-subagents-hub/issues/3), from [tintinweb/pi-subagents#393](https://github.com/tintinweb/pi-subagents/issues/393)).
 - **Paused agents with no persisted session survive a quit and are re-run by `/continue`.** The pause manifest previously listed only agents with a session file, so `persist_session: false` and queued spawns were lost on quit; each row now carries a respawn recipe (the original prompt plus the model, thinking level, turn cap and isolation the live record held), and `/continue` re-runs it fresh after a restart — reclaiming its handle and alias — while still resuming session-backed agents exactly. The `/pause` and `/continue` reports say so, and the "quitting loses it" warning is now reserved for a paused record with neither a session file nor a prompt. A re-run starts a new conversation: the earlier transcript and tool state are gone.
