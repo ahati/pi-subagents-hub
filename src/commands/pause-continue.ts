@@ -16,6 +16,7 @@ import { runInChildSessionContext } from "../child-context.js";
 import { getOutputTranscriptDefault } from "../output-file.js";
 import {
   type PausedAgentEntry,
+  type PausedWorkflowEntry,
   PauseStore,
   resolvePauseManifestPath,
   resolvePauseStorePath,
@@ -24,6 +25,7 @@ import { continueSessionBare, finalReportFromSessionFile } from "../session-cont
 import { shadowToolsFactory } from "../shadow-tools.js";
 import type { AgentRecord, AgentTombstone } from "../types.js";
 import type { AgentActivity } from "../ui/agent-widget.js";
+import { pauseWorkflowTask, resumeWorkflowTask, type WorkflowTask } from "../workflow/task.js";
 import { type ParkGateController, recordName } from "./pause-state.js";
 
 const MANAGER_KEY = Symbol.for("pi-subagents:manager");
@@ -43,6 +45,8 @@ export interface PauseContinueDeps {
   reloadCustomAgents: () => void;
   resolveModel: (model: string, registry?: any) => any;
   isShowCostEnabled: () => boolean;
+  workflowTasks?: Map<string, WorkflowTask>;
+  relaunchWorkflow?: (ctx: ExtensionContext, entry: PausedWorkflowEntry) => Promise<boolean>;
 }
 
 export function resumeAgentSession(
@@ -102,6 +106,7 @@ export function syncPauseManifest(
   ctx: ExtensionContext,
   park: ParkGateController,
   manager: AgentManager,
+  workflowTasks?: ReadonlyMap<string, WorkflowTask>,
 ): void {
   const sessionId = ctx.sessionManager?.getSessionId?.();
   if (!sessionId) return;
@@ -127,7 +132,22 @@ export function syncPauseManifest(
       if (current !== entry) park.capturedSettled.set(id, current);
       if (!present.has(id)) entries.push(current);
     }
-    store.replace(entries);
+    if (workflowTasks !== undefined) {
+      const prevWf = new Map(store.listWorkflows().map(w => [w.id, w.pausedAt]));
+      const workflows: PausedWorkflowEntry[] = [...workflowTasks.values()]
+        .filter(t => t.status === "paused" && t.journalPath !== undefined)
+        .map(t => ({
+          id: t.id,
+          journalPath: t.journalPath!,
+          script: t.script,
+          args: t.args,
+          toolCallId: t.toolCallId,
+          pausedAt: prevWf.get(t.id) ?? new Date(t.pausedAt ?? Date.now()).toISOString(),
+        }));
+      store.replaceBoth(entries, workflows);
+    } else {
+      store.replace(entries);
+    }
   } catch {
     // Manifest write failed — in-session pause/resume still works.
   }
@@ -137,7 +157,7 @@ export async function pauseAllCommand(
   ctx: ExtensionCommandContext,
   deps: PauseContinueDeps,
 ): Promise<void> {
-  const { pi, manager, park } = deps;
+  const { pi, manager, park, workflowTasks } = deps;
   if (!ctx.isIdle()) {
     if (park.armedPause) {
       park.armedPause = false;
@@ -148,10 +168,13 @@ export async function pauseAllCommand(
     ctx.ui.notify("Pausing when the turn reaches its next boundary — /pause again to cancel.", "info");
     return;
   }
-  const captured = park.captureSettledResults(ctx, manager, c => syncPauseManifest(c, park, manager));
+  const captured = park.captureSettledResults(ctx, manager, c => syncPauseManifest(c, park, manager, workflowTasks));
   const active = manager.listAgents().filter(isTopLevelAgent)
     .filter(a => a.status === "running" || a.status === "queued");
-  if (active.length === 0 && captured === 0) {
+  const activeWorkflows = workflowTasks
+    ? [...workflowTasks.values()].filter(t => t.status === "running")
+    : [];
+  if (active.length === 0 && activeWorkflows.length === 0 && captured === 0) {
     ctx.ui.notify("No active agents to pause.", "info");
     return;
   }
@@ -171,9 +194,16 @@ export async function pauseAllCommand(
       else lost++;
     }
   }
-  syncPauseManifest(ctx, park, manager);
+  let pausedWorkflows = 0;
+  for (const task of activeWorkflows) {
+    if (pauseWorkflowTask(task)) {
+      pausedWorkflows++;
+    }
+  }
+  syncPauseManifest(ctx, park, manager, workflowTasks);
   const parts: string[] = [];
   if (paused > 0) parts.push(`Paused ${paused} agent${paused === 1 ? "" : "s"}`);
+  if (pausedWorkflows > 0) parts.push(`Paused ${pausedWorkflows} workflow run${pausedWorkflows === 1 ? "" : "s"}`);
   if (captured > 0) parts.push(`Captured ${captured} completed result${captured === 1 ? "" : "s"} for /continue`);
   if (ephemeral > 0) parts.push(`${ephemeral} with no session — /continue re-runs ${ephemeral === 1 ? "it" : "them"} from scratch`);
   if (lost > 0) parts.push(`${lost} without a persisted session — quitting loses ${lost === 1 ? "it" : "them"}`);
@@ -267,7 +297,17 @@ export async function continuePausedCommand(
   const store = new PauseStore(resolvePauseManifestPath(ctx.cwd, sessionId));
   const entries = store.list();
   const mainTurn = store.getMainTurn();
-  if (entries.length === 0 && !mainTurn?.parked) {
+  const workflowEntries = store.listWorkflows();
+  const livePausedWorkflows = deps.workflowTasks
+    ? [...deps.workflowTasks.values()].filter(t => t.status === "paused")
+    : [];
+
+  if (
+    entries.length === 0 &&
+    !mainTurn?.parked &&
+    workflowEntries.length === 0 &&
+    livePausedWorkflows.length === 0
+  ) {
     ctx.ui.notify("Nothing paused in this session.", "info");
     return;
   }
@@ -353,17 +393,66 @@ export async function continuePausedCommand(
   }
   store.replace([...failed, ...undelivered]);
 
+  let resumedWorkflows = 0;
+  let failedWorkflows = 0;
+  const remainingWorkflows: PausedWorkflowEntry[] = [];
+  const handledWorkflowIds = new Set<string>();
+
+  for (const task of livePausedWorkflows) {
+    if (resumeWorkflowTask(task)) {
+      resumedWorkflows++;
+      handledWorkflowIds.add(task.id);
+    } else {
+      failedWorkflows++;
+    }
+  }
+
+  for (const entry of workflowEntries) {
+    if (handledWorkflowIds.has(entry.id)) {
+      continue;
+    }
+    const live = deps.workflowTasks?.get(entry.id);
+    if (live) {
+      if (live.status === "paused") {
+        if (resumeWorkflowTask(live)) {
+          resumedWorkflows++;
+          handledWorkflowIds.add(entry.id);
+        } else {
+          failedWorkflows++;
+          remainingWorkflows.push(entry);
+        }
+      }
+      continue;
+    }
+    if (deps.relaunchWorkflow) {
+      const ok = await deps.relaunchWorkflow(ctx, entry);
+      if (ok) {
+        resumedWorkflows++;
+        handledWorkflowIds.add(entry.id);
+      } else {
+        failedWorkflows++;
+        remainingWorkflows.push(entry);
+      }
+    } else {
+      failedWorkflows++;
+      remainingWorkflows.push(entry);
+    }
+  }
+  store.replaceWorkflows(remainingWorkflows);
+
   const parts: string[] = [];
   if (continuedMain) parts.push("Continued the parked main turn");
   if (resumed > 0) parts.push(`Continued ${resumed} agent${resumed === 1 ? "" : "s"}`);
+  if (resumedWorkflows > 0) parts.push(`Continued ${resumedWorkflows} workflow run${resumedWorkflows === 1 ? "" : "s"}`);
   if (respawned > 0) parts.push(`${respawned} re-ran from scratch (transcript not restored)`);
   if (stale > 0) parts.push(`${stale} already handled`);
   if (delivered > 0) parts.push(`Delivered ${delivered} captured agent result${delivered === 1 ? "" : "s"}`);
   if (failedRevive > 0) parts.push(`${failedRevive} could not be revived (kept in the manifest)`);
   if (failedRespawn > 0) parts.push(`${failedRespawn} could not be re-run (kept in the manifest)`);
+  if (failedWorkflows > 0) parts.push(`${failedWorkflows} workflow run${failedWorkflows === 1 ? "" : "s"} could not be continued (kept in the manifest)`);
   if (undelivered.length > 0) parts.push(`${undelivered.length} result${undelivered.length === 1 ? "" : "s"} could not be delivered (kept in the manifest)`);
   if (parts.length === 0) parts.push("Nothing left to continue");
-  ctx.ui.notify(parts.join("; ") + ".", !continuedMain && resumed === 0 && respawned === 0 && delivered === 0 && failed.length > 0 ? "warning" : "info");
+  ctx.ui.notify(parts.join("; ") + ".", !continuedMain && resumed === 0 && resumedWorkflows === 0 && respawned === 0 && delivered === 0 && (failed.length > 0 || failedWorkflows > 0) ? "warning" : "info");
 }
 
 export async function continueParkedMainTurn(

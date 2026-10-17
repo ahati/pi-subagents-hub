@@ -284,6 +284,19 @@ export class PauseStore {
     this.write(entries, mainTurn, workflows);
   }
 
+  /**
+   * Replace both the agent and workflow rows atomically, preserving the parked
+   * main turn. Clears the file when all three are empty.
+   */
+  replaceBoth(entries: PausedAgentEntry[], workflows: PausedWorkflowEntry[]): void {
+    const { mainTurn } = this.read();
+    if (entries.length === 0 && workflows.length === 0 && !mainTurn) {
+      this.clear();
+      return;
+    }
+    this.write(entries, mainTurn, workflows);
+  }
+
   /** Read rows and main turn tolerantly: v1/v2 files, garbage and all. */
   private read(): {
     entries: PausedAgentEntry[];

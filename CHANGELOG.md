@@ -9,6 +9,9 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Global `/pause` and `/continue` now pause and resume workflow runs alongside agents.** `/pause` previously filtered for top-level subagents (`isTopLevelAgent`) and ignored running `SubagentWorkflow` tasks. It now parks active workflow tasks via `pauseWorkflowTask`, saves their execution state (script, journal path, args, tool call id) to the pause manifest, and notifies with the count of paused workflows. `/continue` resumes in-memory paused workflows via `resumeWorkflowTask` or relaunches them across process restarts using journal replay, clearing the manifest entry on completion ([#5](https://github.com/ahati/pi-subagents-hub/issues/5)).
+
 ## [2026.10.17-r1] - 2026-10-17
 
 ### Added

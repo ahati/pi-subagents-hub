@@ -106,8 +106,8 @@ function controllableResume(session: () => any) {
     });
 }
 
-function boot() {
-  hermetic = hermeticDir({ settings: { outputTranscript: false } });
+function boot(settings: Record<string, unknown> = {}) {
+  hermetic = hermeticDir({ settings: { outputTranscript: false, ...settings } });
   return bootOnly();
 }
 
@@ -152,6 +152,21 @@ async function spawnRunning(
   );
   await flush();
   return /Agent ID: (\S+)/.exec(textOf(r))![1];
+}
+
+/** Spawn one running workflow through the real SubagentWorkflow tool. */
+async function spawnRunningWorkflow(b: BootedPi, name = "wf-flow"): Promise<string> {
+  const script = `export const meta = { name: "${name}", description: "d" };\nawait agent("held");\nreturn 1;\n`;
+  heldRun(resumableSession);
+  const r = await b.tools.get("SubagentWorkflow").execute(
+    "tc-wf",
+    { script },
+    undefined,
+    undefined,
+    ctx({ cwd: hermetic!.dir }),
+  );
+  await flush();
+  return (r as any).details.taskId;
 }
 
 describe("/pause", () => {
@@ -333,6 +348,40 @@ describe("/pause", () => {
 
     const entry = manifest().list().find(e => e.id === id);
     expect(entry?.pausedAt).toBe(pausedAt);
+  });
+
+  it("pauses active workflow runs and writes them to the manifest", async () => {
+    const b = boot({ workflowsEnabled: true });
+    const wfId = await spawnRunningWorkflow(b, "wf-pause");
+
+    const { cmdCtx } = runCommand(b, "pause");
+    await flush();
+
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith("Paused 1 workflow run.", "info");
+
+    const workflows = manifest().listWorkflows();
+    expect(workflows).toHaveLength(1);
+    expect(workflows[0].id).toBe(wfId);
+    expect(workflows[0].script).toContain("wf-pause");
+    expect(workflows[0].journalPath).toBeTruthy();
+    expect(workflows[0].pausedAt).toBeTruthy();
+  });
+
+  it("pauses both active agents and workflows in one /pause", async () => {
+    const b = boot({ workflowsEnabled: true });
+    const agentId = await spawnRunning(b, resumableSession, "agent-one");
+    const wfId = await spawnRunningWorkflow(b, "wf-two");
+
+    const { cmdCtx } = runCommand(b, "pause");
+    await flush();
+
+    expect(manager().getRecord(agentId).status).toBe("paused");
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith("Paused 1 agent; Paused 1 workflow run.", "info");
+
+    expect(manifest().list()).toHaveLength(1);
+    expect(manifest().list()[0].id).toBe(agentId);
+    expect(manifest().listWorkflows()).toHaveLength(1);
+    expect(manifest().listWorkflows()[0].id).toBe(wfId);
   });
 });
 
@@ -807,6 +856,83 @@ describe("/continue", () => {
     expect(manifest().list()).toEqual([]);
   });
 
+  it("resumes live paused workflows in place and clears the manifest", async () => {
+    const b = boot({ workflowsEnabled: true });
+    await spawnRunningWorkflow(b, "wf-live-continue");
+    await runCommand(b, "pause").result;
+    await flush();
+    expect(manifest().listWorkflows()).toHaveLength(1);
+
+    const { cmdCtx } = runCommand(b, "continue");
+    await flush();
+
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith("Continued 1 workflow run.", "info");
+    expect(manifest().listWorkflows()).toEqual([]);
+  });
+
+  it("resumes both live agents and workflows in one /continue", async () => {
+    const b = boot({ workflowsEnabled: true });
+    await spawnRunning(b, resumableSession, "agent-live");
+    await spawnRunningWorkflow(b, "wf-live");
+    await runCommand(b, "pause").result;
+    await flush();
+
+    expect(manifest().list()).toHaveLength(1);
+    expect(manifest().listWorkflows()).toHaveLength(1);
+
+    const { cmdCtx } = runCommand(b, "continue");
+    await flush();
+
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith("Continued 1 agent; Continued 1 workflow run.", "info");
+    expect(manifest().list()).toEqual([]);
+    expect(manifest().listWorkflows()).toEqual([]);
+  });
+
+  it("relaunches a workflow from manifest after a simulated restart", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false, workflowsEnabled: true } });
+    const journalPath = join(hermetic.dir, "test.workflow.jsonl");
+    writeFileSync(journalPath, '{"index":0,"key":"k0","ok":true,"text":"prior answer"}\n');
+
+    new PauseStore(resolvePauseStorePath(process.cwd(), "s1")).replaceWorkflows([
+      {
+        id: "wf_prior",
+        journalPath,
+        script: 'export const meta = { name: "wf-resumed", description: "d" };\nawait agent("held");\nreturn 1;\n',
+        pausedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+
+    const b = bootOnly();
+    heldRun(resumableSession);
+    const { cmdCtx } = runCommand(b, "continue");
+    await flush();
+
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith("Continued 1 workflow run.", "info");
+    expect(manifest().listWorkflows()).toEqual([]);
+  });
+
+  it("keeps a workflow row in manifest when relaunch fails and warns", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false, workflowsEnabled: true } });
+    new PauseStore(resolvePauseStorePath(process.cwd(), "s1")).replaceWorkflows([
+      {
+        id: "wf_bad",
+        journalPath: "/nonexistent.jsonl",
+        script: "invalid syntax { { {",
+        pausedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+
+    const b = bootOnly();
+    const { cmdCtx } = runCommand(b, "continue");
+    await flush();
+
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith(
+      "1 workflow run could not be continued (kept in the manifest).",
+      "warning",
+    );
+    expect(manifest().listWorkflows()).toHaveLength(1);
+  });
+
   it("rejects an argument in favor of /agents resume", async () => {
     const b = boot();
     const { cmdCtx } = runCommand(b, "continue", "@explore");
@@ -838,6 +964,27 @@ describe("pause manifest hint", () => {
 
     expect(startCtx.ui.notify).toHaveBeenCalledWith(
       "1 subagent paused here — /continue to resume.",
+      "info",
+    );
+  });
+
+  it("session_start announces parked workflow runs when the session is loaded again", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false, workflowsEnabled: true } });
+    new PauseStore(resolvePauseStorePath(process.cwd(), "s1")).replaceWorkflows([
+      {
+        id: "wf_hint",
+        journalPath: join(hermetic.dir, "wf.jsonl"),
+        script: 'export const meta = { name: "wf-hint", description: "d" };',
+        pausedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+
+    const b = bootOnly();
+    const startCtx = ctx();
+    await b.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, startCtx);
+
+    expect(startCtx.ui.notify).toHaveBeenCalledWith(
+      "1 workflow run paused here — /continue to resume.",
       "info",
     );
   });

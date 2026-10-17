@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { defineTool, type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -8,6 +8,7 @@ import { SUBAGENT_TOOL_NAMES } from "../agent-runner.js";
 import type { CompletionOutbox } from "../completion-outbox.js";
 import { textResult, WORKFLOW_FILE_FLAG } from "../entry/renderers.js";
 import { sessionTaskDir } from "../output-file.js";
+import type { PausedWorkflowEntry } from "../pause-store.js";
 import type { AgentActivity, AgentWidget } from "../ui/agent-widget.js";
 import type { FleetList, FleetWorkflow } from "../ui/fleet-list.js";
 import { renderWorkflowCard } from "../ui/workflow-card.js";
@@ -121,6 +122,68 @@ export function notifyWorkflowFinished(
     },
   };
   outbox.add({ ids: [task.id], build: () => message });
+}
+
+export interface RelaunchWorkflowDeps {
+  pi: ExtensionAPI;
+  ctx: ExtensionContext;
+  manager: AgentManager;
+  agentActivity: Map<string, AgentActivity>;
+  workflowTasks: Map<string, WorkflowTask>;
+  widget: AgentWidget;
+  fleet: FleetList;
+  outbox: CompletionOutbox;
+  entry: PausedWorkflowEntry;
+}
+
+export async function relaunchWorkflowFromEntry(deps: RelaunchWorkflowDeps): Promise<boolean> {
+  const { pi, ctx, manager, agentActivity, workflowTasks, widget, fleet, outbox, entry } = deps;
+  let meta: WorkflowMeta;
+  try {
+    meta = extractMeta(entry.script).meta;
+  } catch (err) {
+    console.warn(`[pi-subagents-hub] could not extract meta for workflow ${entry.id}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+
+  const runId = workflowRunId();
+  let savedPath: string | undefined;
+  let journalPath: string | undefined;
+  try {
+    const dir = sessionTaskDir(ctx.cwd, ctx.sessionManager.getSessionId());
+    savedPath = join(dir, `${runId}.workflow.js`);
+    writeFileSync(savedPath, entry.script, "utf-8");
+    journalPath = join(dir, `${runId}.workflow.jsonl`);
+  } catch (err) {
+    savedPath = undefined;
+    journalPath = undefined;
+    console.warn(`[pi-subagents-hub] could not persist workflow script: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const replay = entry.journalPath && existsSync(entry.journalPath)
+    ? readJournal(entry.journalPath)
+    : undefined;
+
+  const task = createWorkflowTask({
+    id: runId,
+    script: entry.script,
+    scriptPath: savedPath,
+    args: entry.args,
+    meta,
+    toolCallId: entry.toolCallId,
+    ...(journalPath !== undefined ? { journalPath } : {}),
+    ...(replay !== undefined && replay.length > 0 ? { replay, resumedFrom: entry.id } : {}),
+  });
+
+  workflowTasks.set(runId, task);
+  widget.update();
+  fleet.update();
+
+  void runWorkflowTask(pi, ctx, manager, agentActivity, task).then(() =>
+    notifyWorkflowFinished(task, widget, fleet, outbox),
+  );
+
+  return true;
 }
 
 export function createWorkflowTool(deps: WorkflowToolDeps) {

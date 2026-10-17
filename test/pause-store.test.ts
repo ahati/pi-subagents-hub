@@ -498,4 +498,30 @@ describe("PauseStore workflows (v3)", () => {
     writeFileSync(bogus, JSON.stringify({ version: 3, entries: [], workflows: "nope" }));
     expect(new PauseStore(bogus).listWorkflows()).toEqual([]);
   });
+
+  it("replaceBoth sets both agent entries and workflow rows atomically", () => {
+    const file = join(tempDir(), "manifest.json");
+    const store = new PauseStore(file);
+    const agentRow = entry({ id: "agent-both" });
+    const wfRow = workflowRow({ id: "wf-both" });
+
+    store.replaceBoth([agentRow], [wfRow]);
+
+    expect(store.list()).toEqual([agentRow]);
+    expect(store.listWorkflows()).toEqual([wfRow]);
+    const onDisk = JSON.parse(readFileSync(file, "utf-8"));
+    expect(onDisk.version).toBe(3);
+    expect(onDisk.entries).toEqual([agentRow]);
+    expect(onDisk.workflows).toEqual([wfRow]);
+  });
+
+  it("replaceBoth clears the file when entries and workflows are empty and no mainTurn", () => {
+    const file = join(tempDir(), "manifest.json");
+    const store = new PauseStore(file);
+    store.replaceBoth([entry()], [workflowRow()]);
+    expect(existsSync(file)).toBe(true);
+
+    store.replaceBoth([], []);
+    expect(existsSync(file)).toBe(false);
+  });
 });

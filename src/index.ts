@@ -106,6 +106,7 @@ import {
 import {
   createWorkflowTool,
   fleetWorkflows,
+  relaunchWorkflowFromEntry,
   resolveWorkflowCollisions,
   runWorkflowFlag,
 } from "./tools/workflow-tool.js";
@@ -433,6 +434,8 @@ export default function (pi: ExtensionAPI) {
     (event, payload) => pi.events.emit(event, payload),
   );
 
+  const workflowTasks = new Map<string, WorkflowTask>();
+
   const pauseDeps: PauseContinueDeps = {
     pi,
     manager,
@@ -443,6 +446,19 @@ export default function (pi: ExtensionAPI) {
     reloadCustomAgents: () => reloadCustomAgents(),
     resolveModel: (m, r) => resolveModel(m, r),
     isShowCostEnabled,
+    workflowTasks,
+    relaunchWorkflow: (ctx, entry) =>
+      relaunchWorkflowFromEntry({
+        pi,
+        ctx,
+        manager,
+        agentActivity,
+        workflowTasks,
+        widget,
+        fleet,
+        outbox,
+        entry,
+      }),
   };
 
   const agentTool = createAgentTool({
@@ -467,8 +483,6 @@ export default function (pi: ExtensionAPI) {
 
   const registeredAgentTool = withUsageReporting(agentTool, () => reportUsage, pendingUsage);
   pi.registerTool(registeredAgentTool);
-
-  const workflowTasks = new Map<string, WorkflowTask>();
 
   const workflowTool = createWorkflowTool({
     pi,
@@ -627,8 +641,16 @@ export default function (pi: ExtensionAPI) {
       if (task === undefined || task.control === undefined) return undefined;
       const control = task.control;
       return {
-        pause: () => pauseWorkflowTask(task),
-        resume: () => resumeWorkflowTask(task),
+        pause: () => {
+          const ok = pauseWorkflowTask(task);
+          if (ok && currentCtx) syncPauseManifest(currentCtx, park, manager, workflowTasks);
+          return ok;
+        },
+        resume: () => {
+          const ok = resumeWorkflowTask(task);
+          if (ok && currentCtx) syncPauseManifest(currentCtx, park, manager, workflowTasks);
+          return ok;
+        },
         skip: index => control.skip(index) === true,
         retry: index => control.retry(index) === true,
       };
@@ -665,7 +687,7 @@ export default function (pi: ExtensionAPI) {
       foregroundHandoffs,
       workflowTasks,
       reloadCustomAgents: () => reloadCustomAgents(),
-      syncPauseManifest: (c) => syncPauseManifest(c, park, manager),
+      syncPauseManifest: (c) => syncPauseManifest(c, park, manager, workflowTasks),
       pauseAgentRecord: (r) => pauseAgentRecord(r, pi, manager),
       resumeAgentById: (c, r, p) => resumeAgentById(c, r, pauseDeps, p),
       resolveAgentRef,

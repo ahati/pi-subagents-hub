@@ -226,10 +226,14 @@ export function registerSessionLifecycle(
         }
         const store = new PauseStore(resolvePauseManifestPath(ctx.cwd, sid));
         const parked = store.list();
+        const workflows = store.listWorkflows();
         const mainTurn = store.getMainTurn();
         const hint: string[] = [];
         if (parked.length > 0) {
           hint.push(`${parked.length} subagent${parked.length === 1 ? "" : "s"} paused here`);
+        }
+        if (workflows.length > 0) {
+          hint.push(`${workflows.length} workflow run${workflows.length === 1 ? "" : "s"} paused here`);
         }
         const respawnCount = parked.filter(e => e.respawn !== undefined).length;
         if (respawnCount > 0) hint.push(`${respawnCount} to re-run from scratch`);
