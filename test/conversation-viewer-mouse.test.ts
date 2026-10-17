@@ -45,10 +45,10 @@ describe("regular conversation viewer", () => {
     try {
       const before = render();
       expect(before).toHaveLength(21);
-      expect(before[0]).toBe("─".repeat(90));
-      expect(before.at(-1)).toBe("─".repeat(90));
+      expect(before[0]).toBe("\u2594".repeat(90));
+      expect(before.at(-1)).toBe("\u2581".repeat(90));
       expect(before.every(line => visibleWidth(line) === 90)).toBe(true);
-      expect(before.slice(1, -1).every(line => line.startsWith("  ") && line.endsWith("  "))).toBe(true);
+      expect(before.slice(1, -1).every(line => line.startsWith(" ") && line.endsWith(" "))).toBe(true);
       expect(mouse({ wheelDelta: -10 })).toMatchObject({ handled: false });
       expect(render()).toEqual(before);
       viewer.handleInput("\x1b[H");

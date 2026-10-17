@@ -713,7 +713,7 @@ export class ConversationViewer implements Component, Focusable {
     // no `╭─╮` top/bottom, no side `│`; every line pads to the full width.
     const frameless = this.framelessNow();
     const isPi = this.uiStyleNow() === "pi";
-    const innerW = this.fullscreen ? this.scrollView.getContentWidth(width - 1) : frameless ? width : width - 4; // border + padding
+    const innerW = this.fullscreen ? this.scrollView.getContentWidth(width - 1) : frameless ? width : isPi ? width - 2 : width - 4; // border + padding
     this.lastInnerW = innerW;
     const lines: string[] = [];
     const footerActions: { label: string; key: string }[] = [];
@@ -722,17 +722,35 @@ export class ConversationViewer implements Component, Focusable {
       const vis = visibleWidth(s);
       return s + " ".repeat(Math.max(0, len - vis));
     };
+    const applyBg = (text: string): string => {
+      if (typeof (th as any).bg === "function") {
+        text = (th as any).bg("toolPendingBg", text);
+        if (typeof (th as any).getBgAnsi === "function") {
+          const bgAnsi = (th as any).getBgAnsi("toolPendingBg");
+          if (bgAnsi && text.includes("\x1b[0m")) {
+            text = text.replaceAll("\x1b[0m", `\x1b[0m${bgAnsi}`);
+          }
+        }
+      }
+      return text;
+    };
     const row = (content: string, scrollbar?: string): string => {
       if (this.fullscreen) {
         const contentWidth = width - 1 - (scrollbar ? SCROLLBAR_WIDTH : 0);
         return " " + truncateToWidth(content, contentWidth, scrollbar ? "" : "...", true) + (scrollbar ?? "");
       }
       if (frameless) return truncateToWidth(pad(content, innerW), innerW, "...", true);
-      if (isPi) return "  " + truncateToWidth(pad(content, innerW), innerW, "...", true) + "  ";
+      if (isPi) {
+        return applyBg(" " + truncateToWidth(pad(content, innerW), innerW, "...", true) + " ");
+      }
       return th.fg("border", "│") + " " + truncateToWidth(pad(content, innerW), innerW, "...", true) + " " + th.fg("border", "│");
     };
-    const hrTop = th.fg("border", isPi ? "─".repeat(width) : `╭${"─".repeat(width - 2)}╮`);
-    const hrBot = th.fg("border", isPi ? "─".repeat(width) : `╰${"─".repeat(width - 2)}╯`);
+    const hrTop = isPi
+      ? applyBg(th.fg("border", "\u2594".repeat(width)))
+      : th.fg("border", `╭${"─".repeat(width - 2)}╮`);
+    const hrBot = isPi
+      ? applyBg(th.fg("border", "\u2581".repeat(width)))
+      : th.fg("border", `╰${"─".repeat(width - 2)}╯`);
     const hrMid = row(th.fg("dim", "─".repeat(innerW)));
 
     if (!this.fullscreen && !frameless) lines.push(hrTop);

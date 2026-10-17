@@ -594,38 +594,51 @@ describe("agent hub open modes", () => {
     expect(frame).toContain("Sleep then report 1");
   });
 
-  it("renders popup with unicode box borders and outer vertical rails even under uiStyle: pi", () => {
+  it("renders popup with edge-to-edge rules and no side rails under uiStyle: pi", () => {
     const h = harness([makeRecord({ id: "a1" })], { uiStyle: () => "pi" });
     h.open({ agentId: "a1", popup: true });
     const frame = h.frame(120);
-    // Top border has rounded corners
-    expect(frame[0].startsWith("╭")).toBe(true);
-    expect(frame[0].endsWith("╮")).toBe(true);
-    // Middle rows have vertical rails
-    for (let i = 1; i < frame.length - 1; i++) {
-      expect(frame[i].startsWith("│")).toBe(true);
-      expect(frame[i].endsWith("│")).toBe(true);
+    // Top border is edge-to-edge U+2594 rule with no text in border
+    expect(frame[0]).toBe("\u2594".repeat(120));
+    expect(frame[0]).not.toContain("Agents & Workflows");
+    // Body rows have space margins and no vertical rails on edges
+    const body = frame.slice(1, -3);
+    for (const row of body) {
+      expect(row.startsWith(" ")).toBe(true);
+      expect(row.endsWith(" ")).toBe(true);
+      expect(row).not.toMatch(/^│/);
+      expect(row).not.toMatch(/│$/);
+      expect(row).not.toMatch(/^\u{1FB70}/u);
+      expect(row).not.toMatch(/\u{1FB75}$/u);
     }
-    // Bottom border has rounded corners
-    expect(frame.at(-1)?.startsWith("╰")).toBe(true);
-    expect(frame.at(-1)?.endsWith("╯")).toBe(true);
+    // Bottom border is edge-to-edge U+2581 rule
+    expect(frame.at(-1)).toBe("\u2581".repeat(120));
     h.components.at(-1)?.dispose?.();
   });
 
-  it("renders fullscreen with edge-to-edge rules and no outer rails under uiStyle: pi", () => {
+  it("renders fullscreen with edge-to-edge rules, no side rails, and left panel header under uiStyle: pi", () => {
     const h = harness([makeRecord({ id: "a1" })], { uiStyle: () => "pi" });
     h.open({ agentId: "a1", popup: false });
     const frame = h.frame(120);
-    // Top border is edge-to-edge rule with tee
-    expect(frame[0].startsWith("─")).toBe(true);
-    expect(frame[0]).toContain("┬");
-    // Middle rows have space margins on edges, no outer │ rails
-    for (let i = 1; i < frame.length - 1; i++) {
-      expect(frame[i]).not.toMatch(/^│/);
-      expect(frame[i]).not.toMatch(/│$/);
+    // Top border is edge-to-edge U+2594 rule with no text in border
+    expect(frame[0]).toBe("\u2594".repeat(120));
+    expect(frame[0]).not.toContain("Agents & Workflows");
+    // First row inside left panel is Agents & Workflows
+    expect(frame[1]).toContain("Agents & Workflows");
+    // Second row inside left panel is separator
+    expect(frame[2]).toContain("─");
+    // Middle rows have space margins and no vertical rails on edges
+    const fsBody = frame.slice(1, -3);
+    for (const row of fsBody) {
+      expect(row.startsWith(" ")).toBe(true);
+      expect(row.endsWith(" ")).toBe(true);
+      expect(row).not.toMatch(/^│/);
+      expect(row).not.toMatch(/│$/);
+      expect(row).not.toMatch(/^\u{1FB70}/u);
+      expect(row).not.toMatch(/\u{1FB75}$/u);
     }
-    // Bottom border is clean edge-to-edge rule
-    expect(frame.at(-1)).toBe("─".repeat(120));
+    // Bottom border is edge-to-edge U+2581 rule
+    expect(frame.at(-1)).toBe("\u2581".repeat(120));
     h.components.at(-1)?.dispose?.();
   });
 
@@ -639,6 +652,20 @@ describe("agent hub open modes", () => {
     h.open({ popup: false });
     const raw = h.rawFrame(120).join("\n");
     expect(raw).toContain("[bg:selectedBg]");
+    h.components.at(-1)?.dispose?.();
+  });
+
+  it("styles borders and default panel background with toolPendingBg under uiStyle: pi", () => {
+    const customTheme = {
+      fg: (_c: string, s: string) => s,
+      bold: (s: string) => s,
+      bg: (c: string, s: string) => `[bg:${c}]${s}[/bg]`,
+    };
+    const h = harness([makeRecord({ id: "a1" })], { uiStyle: () => "pi" }, { theme: customTheme });
+    h.open({ popup: false });
+    const raw = h.rawFrame(120);
+    expect(raw[0]).toBe(`[bg:toolPendingBg]${"\u2594".repeat(120)}[/bg]`);
+    expect(raw.at(-1)).toBe(`[bg:toolPendingBg]${"\u2581".repeat(120)}[/bg]`);
     h.components.at(-1)?.dispose?.();
   });
 });
@@ -1150,30 +1177,34 @@ describe("P8 — the escalation resize keeps state", () => {
 });
 
 describe("agent hub Pi-native window chrome", () => {
-  it("renders edge-to-edge rules and no side rails in Pi native style", () => {
+  it("renders edge-to-edge rules, left panel title, and no side rails in Pi native style", () => {
     const h = harness([makeRecord({ id: "a1", alias: "worker", description: "do work" })], {
       uiStyle: () => "pi",
     });
     h.open();
     const frame = h.frame(120);
-    // Top border is edge-to-edge rule with divider tee
-    expect(frame[0].startsWith("─")).toBe(true);
-    expect(frame[0]).not.toContain("╭");
-    expect(frame[0]).not.toContain("╮");
-    expect(frame[0]).toContain("┬");
+    // Top border is edge-to-edge U+2594 rule with no text in border and no corners
+    expect(frame[0]).toBe("\u2594".repeat(120));
+    expect(frame[0]).not.toContain("Agents & Workflows");
 
-    // Body rows have space margins and no outer side rails
+    // Inside left panel: first row is Agents & Workflows, followed by separator
+    expect(frame[1]).toContain("Agents & Workflows");
+    expect(frame[2]).toContain("─");
+
+    // Body rows have space margins, no outer vertical rails
     const body = frame.slice(1, -3);
     for (const row of body) {
+      expect(row.startsWith(" ")).toBe(true);
+      expect(row.endsWith(" ")).toBe(true);
       expect(row).not.toMatch(/^│/);
       expect(row).not.toMatch(/│$/);
+      expect(row).not.toMatch(/^\u{1FB70}/u);
+      expect(row).not.toMatch(/\u{1FB75}$/u);
     }
 
-    // Bottom border is edge-to-edge rule with no rounded corners
+    // Bottom border is clean U+2581 horizontal rule across whole width
     const last = frame.at(-1)!;
-    expect(last).toBe("─".repeat(120));
-    expect(last).not.toContain("╰");
-    expect(last).not.toContain("╯");
+    expect(last).toBe("\u2581".repeat(120));
     h.components.at(-1)?.dispose?.();
   });
 });

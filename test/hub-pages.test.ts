@@ -1379,10 +1379,10 @@ describe("P10 — runId opens the run's page and the run controls live there", (
     const h = harness([makeRecord({ id: "a1" })], { uiStyle: () => "pi" });
     h.open();
     const frame = h.frame(120);
-    expect(frame[0].startsWith("─")).toBe(true);
+    expect(frame[0]).toBe("\u2594".repeat(120));
     expect(frame[0]).not.toContain("╭");
     expect(frame[0]).not.toContain("╮");
-    expect(frame.at(-1)).toBe("─".repeat(120));
+    expect(frame.at(-1)).toBe("\u2581".repeat(120));
     expect(frame.at(-1)).not.toContain("╰");
     expect(frame.at(-1)).not.toContain("╯");
   });

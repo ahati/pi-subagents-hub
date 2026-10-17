@@ -117,7 +117,7 @@ describe("ConversationViewer invocation line", () => {
     // The row arrives inside the overlay's frame, padded out to the right
     // border; what is under test is the metadata it carries.
     const row = viewer.render(200).find(l => l.includes("↳"));
-    return row ? row.slice(row.indexOf("↳")).replace(/\s*│?\s*$/, "") : "";
+    return row ? stripTerminalSequences(row).slice(row.indexOf("↳")).replace(/\s*[│\u{1FB75}]?\s*$/u, "") : "";
   }
 
   // The canonical id, not the short label the widget uses: this overlay is
@@ -1176,23 +1176,25 @@ describe("ConversationViewer windowed borders (Pi style vs Claude style)", () =>
       { uiStyle: "pi" },
     );
     const lines = viewer.render(60);
-    // Top border is edge-to-edge ─ with no corners
-    expect(stripTerminalSequences(lines[0])).toBe("─".repeat(60));
+    // Top border is edge-to-edge U+2594 with no corners
+    expect(stripTerminalSequences(lines[0])).toBe("\u2594".repeat(60));
     expect(lines[0]).not.toContain("╭");
     expect(lines[0]).not.toContain("╮");
 
-    // Content lines have no │ side rails
+    // Content lines have space margins and no │ side rails
     const contentLines = lines.slice(1, -1);
     for (const l of contentLines) {
       const stripped = stripTerminalSequences(l);
       expect(stripped).not.toMatch(/^│/);
       expect(stripped).not.toMatch(/│$/);
+      expect(stripped).not.toMatch(/^\u{1FB70}/u);
+      expect(stripped).not.toMatch(/\u{1FB75}$/u);
       expect(visibleWidth(l)).toBe(60);
     }
 
-    // Bottom border is edge-to-edge ─ with no corners
+    // Bottom border is edge-to-edge U+2581 with no corners
     const last = lines[lines.length - 1];
-    expect(stripTerminalSequences(last)).toBe("─".repeat(60));
+    expect(stripTerminalSequences(last)).toBe("\u2581".repeat(60));
     expect(last).not.toContain("╰");
     expect(last).not.toContain("╯");
   });

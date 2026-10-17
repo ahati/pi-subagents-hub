@@ -137,11 +137,13 @@ export const ASCII_GLYPHS: WorkflowGlyphs = {
  */
 export type WorkflowCardColor = "success" | "error" | "warning" | "dim" | "muted" | "toolTitle" | "accent" | "border";
 
+export type WorkflowCardBg = "selectedBg" | "toolPendingBg";
+
 export interface WorkflowCardSegment {
   text: string;
   color?: WorkflowCardColor;
   bold?: boolean;
-  bg?: "selectedBg";
+  bg?: WorkflowCardBg;
 }
 
 export type WorkflowCardLine = WorkflowCardSegment[];

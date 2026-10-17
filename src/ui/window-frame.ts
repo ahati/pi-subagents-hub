@@ -59,6 +59,10 @@ export interface PaneBox {
   /** The window's rule ends: `├` / `┤`. */
   leftTee: string;
   rightTee: string;
+  topHorizontal?: string;
+  bottomHorizontal?: string;
+  leftVertical?: string;
+  rightVertical?: string;
 }
 
 export const UNICODE_PANE_BOX: PaneBox = {
@@ -74,14 +78,18 @@ export const UNICODE_PANE_BOX: PaneBox = {
   rightTee: "┤",
 };
 
-/** Native Pi style: edge-to-edge horizontal rules, clean tees, horizontal ends. */
+/** Native Pi style: U+2594 (▔) top border, U+2581 ( ) bottom border, clean tees, no side edges. */
 export const PI_PANE_BOX: PaneBox = {
-  topLeft: "─",
-  topRight: "─",
-  bottomLeft: "─",
-  bottomRight: "─",
+  topLeft: "\u2594",
+  topRight: "\u2594",
+  bottomLeft: "\u2581",
+  bottomRight: "\u2581",
   horizontal: "─",
   vertical: "│",
+  topHorizontal: "\u2594",
+  bottomHorizontal: "\u2581",
+  leftVertical: "",
+  rightVertical: "",
   topTee: "┬",
   bottomTee: "┴",
   leftTee: "─",
@@ -140,7 +148,8 @@ export function leftPaneWidth(width: number, maxLeft = 18, pad = 0): number {
 export function frameEdge(width: number, box: PaneBox, side: "top" | "bottom", title = ""): string {
   const left = side === "top" ? box.topLeft : box.bottomLeft;
   const right = side === "top" ? box.topRight : box.bottomRight;
-  return `${left}${title}${box.horizontal.repeat(Math.max(0, width - 2 - visibleWidth(title)))}${right}`;
+  const horiz = side === "top" ? (box.topHorizontal ?? box.horizontal) : (box.bottomHorizontal ?? box.horizontal);
+  return `${left}${title}${horiz.repeat(Math.max(0, width - 2 - visibleWidth(title)))}${right}`;
 }
 
 /**
@@ -160,9 +169,10 @@ export function splitEdge(
   const [corner, tee, end] = side === "top"
     ? [box.topLeft, box.topTee, box.topRight]
     : [box.bottomLeft, box.bottomTee, box.bottomRight];
+  const horiz = side === "top" ? (box.topHorizontal ?? box.horizontal) : (box.bottomHorizontal ?? box.horizontal);
   const left = leftCellWidth - visibleWidth(leftCell);
   const right = Math.max(0, width - leftCellWidth - FRAME_BARS);
-  return `${corner}${leftCell}${box.horizontal.repeat(Math.max(0, left))}${tee}${box.horizontal.repeat(right)}${end}`;
+  return `${corner}${leftCell}${horiz.repeat(Math.max(0, left))}${tee}${horiz.repeat(right)}${end}`;
 }
 
 /**
@@ -188,7 +198,9 @@ export function frameRow(
   const inner = windowInnerWidth(width);
   const clamped = truncateToWidth(content, inner, ellipsis, true);
   const gap = Math.max(0, inner - visibleWidth(clamped));
-  return `${border(box.vertical)} ${clamped}${" ".repeat(gap + 1)}${border(box.vertical)}`;
+  const l = box.leftVertical ?? box.vertical;
+  const r = box.rightVertical ?? box.vertical;
+  return `${border(l)} ${clamped}${" ".repeat(gap + 1)}${border(r)}`;
 }
 
 /**
@@ -510,19 +522,23 @@ export function renderWindow(options: {
   style?: UIStyle;
 }): WorkflowCardLine[] {
   const { width, box, panes } = options;
-  const isPi = (options.style === "pi" || options.style === undefined) && (box === PI_PANE_BOX || box.topLeft === "─");
+  const isPi = (options.style === "pi" || options.style === undefined) && (box === PI_PANE_BOX || box.topLeft === "\u2594" || box.topLeft === "─");
   const ellipsis = options.ellipsis ?? "…";
   const edge = (text: string): WorkflowCardSegment => ({ text, color: "border" });
-  const outerLeft: WorkflowCardSegment[] = isPi ? [{ text: " " }] : [edge(box.vertical)];
-  const outerRight: WorkflowCardSegment[] = isPi ? [{ text: " " }] : [edge(box.vertical)];
+  const outerLeft: WorkflowCardSegment[] = isPi ? [{ text: " " }] : [edge(box.leftVertical ?? box.vertical)];
+  const outerRight: WorkflowCardSegment[] = isPi ? [{ text: " " }] : [edge(box.rightVertical ?? box.vertical)];
   const bar = [edge(box.vertical)];
   const rightCell = panes ? width - panes.leftCellWidth - FRAME_BARS : width - 2;
   const lines: WorkflowCardLine[] = [];
 
-  const titleOf = (cellWidth: number) => stripTerminalSequences(truncateToWidth(options.title ?? "", cellWidth, ellipsis));
-  lines.push([edge(panes
-    ? splitEdge(width, panes.leftCellWidth, box, "top", titleOf(panes.leftCellWidth))
-    : frameEdge(width, box, "top", titleOf(Math.max(0, width - 2))))]);
+  const titleText = isPi ? "" : (options.title ?? "");
+  const titleOf = (cellWidth: number) => stripTerminalSequences(truncateToWidth(titleText, cellWidth, ellipsis));
+  const topEdge: WorkflowCardSegment = isPi
+    ? { text: frameEdge(width, box, "top"), color: "border", bg: "toolPendingBg" }
+    : edge(panes
+        ? splitEdge(width, panes.leftCellWidth, box, "top", titleOf(panes.leftCellWidth))
+        : frameEdge(width, box, "top", titleOf(Math.max(0, width - 2))));
+  lines.push([topEdge]);
 
   for (const item of options.rows) {
     switch (item.kind) {
@@ -531,31 +547,41 @@ export function renderWindow(options: {
         const clamped = clampLine(item.cells, inner, ellipsis);
         const gap = Math.max(0, inner - lineWidth(clamped));
         const bg = clamped.find(seg => seg.bg)?.bg;
-        lines.push([...outerLeft, { text: " ", bg }, ...clamped, { text: " ".repeat(gap + 1), bg }, ...outerRight]);
+        const oLeft: WorkflowCardSegment[] = isPi ? [{ text: " ", bg }] : outerLeft;
+        const oRight: WorkflowCardSegment[] = isPi ? [{ text: " ", bg }] : outerRight;
+        lines.push([...oLeft, { text: " ", bg }, ...clamped, { text: " ".repeat(gap + 1), bg }, ...oRight]);
         break;
       }
-      case "split":
+      case "split": {
+        const leftBg = item.left?.find(seg => seg.bg)?.bg;
+        const oLeft: WorkflowCardSegment[] = isPi ? [{ text: " ", bg: leftBg }] : outerLeft;
+        const oRight: WorkflowCardSegment[] = outerRight;
         lines.push(panes
           ? [
-              ...outerLeft,
+              ...oLeft,
               ...paneCell(item.left, panes.leftCellWidth, panes.pad, ellipsis),
               ...bar,
               ...paneCell(item.right, rightCell, panes.pad, ellipsis),
-              ...outerRight,
+              ...oRight,
             ]
-          : [...outerLeft, ...paneCell(item.left ?? item.right, width - 2, 0, ellipsis), ...outerRight]);
+          : [...oLeft, ...paneCell(item.left ?? item.right, width - 2, 0, ellipsis), ...oRight]);
         break;
-      case "headerRule":
+      }
+      case "headerRule": {
+        const leftBg = item.left?.find(seg => seg.bg)?.bg;
+        const oLeft: WorkflowCardSegment[] = isPi ? [{ text: " ", bg: leftBg }] : outerLeft;
+        const oRight: WorkflowCardSegment[] = outerRight;
         lines.push(panes
           ? [
-              ...outerLeft,
+              ...oLeft,
               ...paneCell(item.left, panes.leftCellWidth, panes.pad, ellipsis),
               ...bar,
               ...headerRuleCell(rightCell, panes.pad, box),
-              ...outerRight,
+              ...oRight,
             ]
-          : [...outerLeft, ...headerRuleCell(width - 2, PANE_PADDING, box), ...outerRight]);
+          : [...oLeft, ...headerRuleCell(width - 2, PANE_PADDING, box), ...oRight]);
         break;
+      }
       case "titles": {
         // One rule, whether there are one or two cells to title: the pane `│`
         // becomes a `┬` as soon as a title needs a cell to sit in.
@@ -579,13 +605,15 @@ export function renderWindow(options: {
       case "band":
         lines.push(isPi && panes
           ? bandRuleLine(width, box, panes.leftCellWidth + 1)
-          : [
-              ...outerLeft,
-              { text: " " },
-              ...bandRuleLine(windowInnerWidth(width), box, panes ? panes.leftCellWidth - 1 : undefined),
-              { text: " " },
-              ...outerRight,
-            ]);
+          : isPi
+            ? bandRuleLine(width, box, undefined)
+            : [
+                ...outerLeft,
+                { text: " " },
+                ...bandRuleLine(windowInnerWidth(width), box, panes ? panes.leftCellWidth - 1 : undefined),
+                { text: " " },
+                ...outerRight,
+              ]);
         break;
     }
   }
@@ -593,7 +621,10 @@ export function renderWindow(options: {
   // A banded window's bottom edge is plain: the band row carries the `┴` the
   // divider ends at, so a second one below it would dangle.
   const banded = options.rows.some(row => row.kind === "band");
-  lines.push([edge(panes && !banded ? splitEdge(width, panes.leftCellWidth, box, "bottom") : frameEdge(width, box, "bottom"))]);
+  const bottomEdge: WorkflowCardSegment = isPi
+    ? { text: frameEdge(width, box, "bottom"), color: "border", bg: "toolPendingBg" }
+    : edge(panes && !banded ? splitEdge(width, panes.leftCellWidth, box, "bottom") : frameEdge(width, box, "bottom"));
+  lines.push([bottomEdge]);
   return lines;
 }
 

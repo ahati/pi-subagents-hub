@@ -710,7 +710,6 @@ export class AgentHub implements Component {
   }
 
   private effectiveBox(): PaneBox {
-    if (this.popup) return UNICODE_PANE_BOX;
     return this.effectiveStyle() === "pi" ? PI_PANE_BOX : UNICODE_PANE_BOX;
   }
 
@@ -1344,13 +1343,14 @@ export class AgentHub implements Component {
       renderWindow({
         width,
         box: this.effectiveBox(),
-        style: this.popup ? "claude" : this.effectiveStyle(),
+        style: this.effectiveStyle(),
         panes: twoPane ? masterPaneGeometry(width) : undefined,
-        title: HUB_TITLE,
+        title: this.effectiveStyle() === "pi" ? undefined : HUB_TITLE,
         rows,
         ellipsis: "…",
       }),
       this.theme,
+      this.effectiveStyle(),
     );
   }
 
@@ -1459,7 +1459,7 @@ export class AgentHub implements Component {
       renderWindow({
         width,
         box: this.effectiveBox(),
-        style: this.popup ? "claude" : this.effectiveStyle(),
+        style: this.effectiveStyle(),
         rows: [
           { kind: "full", cells: [{ text: this.activityTitle(width) }] },
           { kind: "full", cells: [{ text: "─".repeat(width), color: "dim" }] },
@@ -1470,6 +1470,7 @@ export class AgentHub implements Component {
         ellipsis: "…",
       }),
       this.theme,
+      this.effectiveStyle(),
     );
   }
 
@@ -1527,6 +1528,16 @@ export class AgentHub implements Component {
 
   /** The left pane: the parent level for whichever page is up. */
   private leftPaneLines(width: number, rows: number): WorkflowCardLine[] {
+    const isPi = this.effectiveStyle() === "pi";
+    if (isPi && rows >= 3) {
+      const titleLine = clampLine([{ text: "Agents & Workflows", bold: true }], width);
+      const sepLine = clampLine([{ text: "─".repeat(width), color: "dim" }], width);
+      const innerRows = rows - 2;
+      const content = this.page === "WA" || this.page === "SAL" || this.page === "L"
+        ? this.runLeftLines(width, innerRows)
+        : this.rosterLines(width, innerRows);
+      return [titleLine, sepLine, ...content];
+    }
     switch (this.page) {
       case "WA":
       case "SAL":
@@ -2431,17 +2442,28 @@ function padLines(lines: readonly PaneRow[], rows: number): PaneRow[] {
  * untouched; the bars, rules and labels the window contributes arrive with a
  * role colour and are painted here. Styling only — the layout is the window's.
  */
-function paintWindow(lines: readonly WorkflowCardLine[], th: Theme): string[] {
-  return lines.map(line =>
-    line
+function paintWindow(lines: readonly WorkflowCardLine[], th: Theme, uiStyle?: UIStyle): string[] {
+  const isPi = uiStyle === "pi";
+  const defaultBg = isPi ? "toolPendingBg" : undefined;
+  return lines.map(line => {
+    return line
       .map(segment => {
         let text = segment.bold ? th.bold(segment.text) : segment.text;
         if (segment.color) text = th.fg(segment.color, text);
-        if (segment.bg && typeof (th as any).bg === "function") text = (th as any).bg(segment.bg, text);
+        const bg = segment.bg ?? defaultBg;
+        if (bg && typeof (th as any).bg === "function") {
+          text = (th as any).bg(bg, text);
+          if (typeof (th as any).getBgAnsi === "function") {
+            const bgAnsi = (th as any).getBgAnsi(bg);
+            if (bgAnsi && text.includes("\x1b[0m")) {
+              text = text.replaceAll("\x1b[0m", `\x1b[0m${bgAnsi}`);
+            }
+          }
+        }
         return text;
       })
-      .join(""),
-  );
+      .join("");
+  });
 }
 
 /** Left cell + a right-aligned tail, truncated hard so lines never wrap. */

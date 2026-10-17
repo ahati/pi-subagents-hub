@@ -372,10 +372,10 @@ describe("Pi-native window chrome", () => {
   const text = (line: WorkflowCardLine) => line.map(segment => segment.text).join("");
 
   it("draws edge-to-edge horizontal borders with no box corners", () => {
-    expect(frameEdge(12, PI_PANE_BOX, "top")).toBe("─".repeat(12));
-    expect(frameEdge(12, PI_PANE_BOX, "bottom")).toBe("─".repeat(12));
-    expect(splitEdge(24, 8, PI_PANE_BOX, "top", " Agents ")).toBe(`─ Agents ┬${"─".repeat(14)}`);
-    expect(splitEdge(24, 8, PI_PANE_BOX, "bottom")).toBe(`─${"─".repeat(8)}┴${"─".repeat(14)}`);
+    expect(frameEdge(12, PI_PANE_BOX, "top")).toBe("\u2594".repeat(12));
+    expect(frameEdge(12, PI_PANE_BOX, "bottom")).toBe("\u2581".repeat(12));
+    expect(splitEdge(24, 8, PI_PANE_BOX, "top")).toBe(`${"\u2594".repeat(9)}┬${"\u2594".repeat(14)}`);
+    expect(splitEdge(24, 8, PI_PANE_BOX, "bottom")).toBe(`${"\u2581".repeat(9)}┴${"\u2581".repeat(14)}`);
   });
 
   it("renders a split window with horizontal edges, divider between panes, and space margins", () => {
@@ -393,8 +393,9 @@ describe("Pi-native window chrome", () => {
       ],
     });
 
-    // Top border is edge-to-edge horizontal rule with tee
-    expect(text(lines[0])).toBe(`─ Agents ${"─".repeat(12)}┬${"─".repeat(38)}`);
+    // Top border is edge-to-edge U+2594 upper block with toolPendingBg and no corners or title
+    expect(text(lines[0])).toBe("\u2594".repeat(60));
+    expect(lines[0][0]?.bg).toBe("toolPendingBg");
     expect(visibleWidth(text(lines[0]))).toBe(60);
 
     // Split content row: space margin on left, pane divider in middle, space margin on right (no │ on edges)
@@ -405,7 +406,7 @@ describe("Pi-native window chrome", () => {
     expect(text(lines[1])).toContain("│"); // inner divider
     expect(visibleWidth(text(lines[1]))).toBe(60);
 
-    // Band row: horizontal rule with ┴ aligned with top ┬
+    // Band row: horizontal rule with ┴ aligned with inner divider
     expect(text(lines[2])).toBe(`${"─".repeat(21)}┴${"─".repeat(38)}`);
     expect(visibleWidth(text(lines[2]))).toBe(60);
 
@@ -415,8 +416,9 @@ describe("Pi-native window chrome", () => {
     expect(text(lines[3])).not.toContain("│");
     expect(visibleWidth(text(lines[3]))).toBe(60);
 
-    // Bottom border is clean horizontal rule across whole width
-    expect(text(lines[4])).toBe("─".repeat(60));
+    // Bottom border is edge-to-edge U+2581 lower block with toolPendingBg across whole width
+    expect(text(lines[4])).toBe("\u2581".repeat(60));
+    expect(lines[4][0]?.bg).toBe("toolPendingBg");
     expect(visibleWidth(text(lines[4]))).toBe(60);
   });
 
