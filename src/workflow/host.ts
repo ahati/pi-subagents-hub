@@ -36,9 +36,11 @@ import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../agent-manager.js";
 import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
+import { createActivityTracker } from "../entry/activity.js";
 import { resolveModel } from "../model-resolver.js";
 import { checkModelScope } from "../model-scope.js";
 import type { AgentRecord, ThinkingLevel } from "../types.js";
+import type { AgentActivity } from "../ui/agent-widget.js";
 import { getLifetimeTotal } from "../usage.js";
 import type { WorkflowGateResult, WorkflowHost, WorkflowSpawnResult } from "./runtime.js";
 import { resolveWorkflowSource } from "./saved.js";
@@ -68,6 +70,12 @@ export interface WorkflowHostOptions {
    */
   workflowId?: string;
   gateTimeoutMs?: number;
+  /**
+   * The session's live activity map — the one the hub's run pages read for a
+   * running child's tool/stream tail. Registered here so workflow children
+   * track like every other spawn; absent (tests), no tracking happens.
+   */
+  agentActivity?: Map<string, AgentActivity>;
 }
 
 /**
@@ -250,6 +258,9 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
        */
       let gate: WorkflowGateResult | undefined;
       let spawnedId: string | undefined;
+      // Same live tracking every other spawn path gets: without it the hub's run
+      // pages fall back to a transcript scan and never show tool calls.
+      const tracker = deps.agentActivity ? createActivityTracker() : undefined;
 
       /**
        * Hand the child's EFFECTIVE configuration back to the run.
@@ -342,6 +353,12 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
             // Fires once the child's session exists, which is where the model
             // and the clamped thinking level first become knowable.
             onSessionCreated: () => { sessionReady = true; reportResolved(); },
+            ...(tracker ? {
+              onToolActivity: tracker.callbacks.onToolActivity,
+              onTextDelta: tracker.callbacks.onTextDelta,
+              onTurnEnd: tracker.callbacks.onTurnEnd,
+              onMessageStart: tracker.callbacks.onMessageStart,
+            } : {}),
             ...(request.schema !== undefined ? { structuredOutput: request.schema } : {}),
             ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
             ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
@@ -351,6 +368,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
           id => {
             spawnedId = id;
             records.set(request.agentId, id);
+            if (tracker) deps.agentActivity!.set(id, tracker.state);
             // Ahead of `reportResolved`, and not folded into it: that one waits
             // for the child's session so it can name the effective model, while
             // the record id is known here and is what the hub opens a
@@ -366,6 +384,10 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
         // never ran. That is this agent's failure, not the run's: the script
         // sees `null` and its siblings carry on.
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        // Settled rows are not live rows: the hub only reads the tracker for a
+        // running or paused child, so the entry goes when the child does.
+        if (tracker && spawnedId !== undefined) deps.agentActivity!.delete(spawnedId);
       }
     },
 
@@ -381,22 +403,35 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       if (id === undefined) {
         return { ok: false, error: `Cannot resume "${agentId}" — it never started.` };
       }
-      const record = await manager.resume(id, prompt, deps.signal);
-      if (record === undefined) {
-        return {
-          ok: false,
-          error: `Agent ${id} has no session left to resume — records are dropped ten minutes after they finish.`,
-        };
+      const tracker = deps.agentActivity ? createActivityTracker() : undefined;
+      if (tracker) deps.agentActivity!.set(id, tracker.state);
+      try {
+        const record = await (tracker
+          ? manager.resume(id, prompt, deps.signal, {
+              onToolActivity: tracker.callbacks.onToolActivity,
+              onTextDelta: tracker.callbacks.onTextDelta,
+              onTurnEnd: tracker.callbacks.onTurnEnd,
+              onMessageStart: tracker.callbacks.onMessageStart,
+            })
+          : manager.resume(id, prompt, deps.signal));
+        if (record === undefined) {
+          return {
+            ok: false,
+            error: `Agent ${id} has no session left to resume — records are dropped ten minutes after they finish.`,
+          };
+        }
+        // The resumed row is built from scratch, so it has to be told the same
+        // thing the first one was — the child's session already exists, so this is
+        // simply read back rather than waited for. The id goes first for the same
+        // reason it does on the spawn path: it is knowable even when the rest is
+        // not.
+        onResolved?.({ recordId: id });
+        const info = resolvedInfo(record);
+        if (info !== undefined) onResolved?.(info);
+        return toSpawnResult(record);
+      } finally {
+        if (tracker) deps.agentActivity!.delete(id);
       }
-      // The resumed row is built from scratch, so it has to be told the same
-      // thing the first one was — the child's session already exists, so this is
-      // simply read back rather than waited for. The id goes first for the same
-      // reason it does on the spawn path: it is knowable even when the rest is
-      // not.
-      onResolved?.({ recordId: id });
-      const info = resolvedInfo(record);
-      if (info !== undefined) onResolved?.(info);
-      return toSpawnResult(record);
     },
 
     /**

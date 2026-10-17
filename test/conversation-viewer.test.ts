@@ -319,7 +319,10 @@ describe("ConversationViewer", () => {
 
     it("no line exceeds width with running activity indicator", () => {
       const activity = {
-        activeTools: new Map([["read", "file.ts"], ["grep", "pattern"]]),
+        activeTools: new Map([
+          ["read", { toolName: "read", args: { path: "file.ts" } }],
+          ["grep", { toolName: "grep", args: { pattern: "pattern" } }],
+        ]),
         toolUses: 5, tokens: "10k", responseText: "R".repeat(400),
         session: { getSessionStats: () => ({ tokens: { total: 50000 } }) },
       };
@@ -1159,7 +1162,7 @@ describe("ConversationViewer embedded chrome (host-composed identity and band)",
   });
 
   it("puts the live activity tail directly under the last content row", () => {
-    const activity = { activeTools: new Map([["t1", "running tests…"]]), responseText: "", turnCount: 1 };
+    const activity = { activeTools: new Map([["t1", { toolName: "bash", args: { command: "npm test" } }]]), responseText: "", turnCount: 1 };
     const viewer = embedded({ viewportRows: 8 }, [{ role: "user", content: "hi" }], {}, activity);
     const lines = viewer.render(60);
     const tail = lines.findIndex(l => l.includes("▍"));

@@ -477,6 +477,7 @@ export default function (pi: ExtensionAPI) {
     widget,
     fleet,
     outbox,
+    agentActivity,
     isWorkflowsEnabled,
     isWorkflowsPinned,
     setWorkflowsDisabledByCollision: () => {
@@ -681,7 +682,7 @@ export default function (pi: ExtensionAPI) {
           fleet.update();
         },
       }, collisionsState),
-      runWorkflowFlag: (c) => runWorkflowFlag(pi, c, manager, workflowTasks, widget, fleet, isWorkflowsEnabled, flagState),
+      runWorkflowFlag: (c) => runWorkflowFlag(pi, c, manager, agentActivity, workflowTasks, widget, fleet, isWorkflowsEnabled, flagState),
       registerMentionProvider: (c) => registerMentionProvider(c, mentionHookDeps, mentionState),
       spawnTopLevel,
       ownsManagerRegistry,

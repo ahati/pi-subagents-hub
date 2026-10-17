@@ -15,6 +15,7 @@ import { clampLine, type WorkflowCardLine } from "../workflow-card.js";
 import { runHeaderLines } from "./hub-headers.js";
 import { type HubPaneHost, identityPane, runGroups } from "./hub-panes.js";
 import {
+  lastNonEmptyLine,
   type PaneRow,
   padLines,
   stamp,
@@ -86,7 +87,7 @@ export function buildAgentLogLines(width: number, rows: number, host: HubLogHost
     lines.push(clampLine([{ text: `${stamp(record.startedAt)} tools  ${record.toolUses} call${record.toolUses === 1 ? "" : "s"}`, color: "dim" }], width));
   }
   if (activity?.responseText) {
-    lines.push(clampLine([{ text: `${stamp(Date.now())} note   ${activity.responseText.split("\n")[0] ?? ""}`, color: "dim" }], width));
+    lines.push(clampLine([{ text: `${stamp(Date.now())} note   ${lastNonEmptyLine(activity.responseText)}`, color: "dim" }], width));
   }
   if (record.status === "running" || record.status === "queued" || record.status === "paused") {
     const doing = activity ? describeActivity(activity.activeTools, activity.responseText) : "thinking…";

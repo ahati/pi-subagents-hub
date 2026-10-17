@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { renderRunningAgentStatus } from "../src/index.js";
+import { createActivityTracker, renderRunningAgentStatus } from "../src/index.js";
 import type { WidgetMode } from "../src/types.js";
-import { type AgentActivity, AgentWidget, describeActivity, fgPreservingNestedStyles, formatCost, formatSessionTokens } from "../src/ui/agent-widget.js";
+import { type ActiveToolCall, type AgentActivity, AgentWidget, describeActivity, fgPreservingNestedStyles, formatCost, formatSessionTokens } from "../src/ui/agent-widget.js";
 
 describe("formatSessionTokens", () => {
   const theme = { fg: (c: string, s: string) => `<${c}>${s}</${c}>`, bold: (s: string) => s };
@@ -60,7 +60,7 @@ describe("renderRunningAgentStatus", () => {
 // `\n` arrives and would otherwise pin the subtext to the message's opening
 // sentence for the rest of the message.
 describe("describeActivity text fallback", () => {
-  const noTools = new Map<string, string>();
+  const noTools = new Map<string, ActiveToolCall>();
 
   it("shows the latest line of streamed text, not the first", () => {
     const streamed = "Let me look at the files.\nReading the config now.\nFound three suspects in src/auth.ts.";
@@ -86,13 +86,97 @@ describe("describeActivity text fallback", () => {
   });
 
   it("keeps tool activity ahead of response text", () => {
-    const reading = new Map([["call-1", "read"], ["call-2", "read"]]);
-    expect(describeActivity(reading, "some streamed text")).toBe("reading 2 files…");
+    const reading = new Map<string, ActiveToolCall>([
+      ["call-1", { toolName: "read", args: { path: "src/a.ts" } }],
+      ["call-2", { toolName: "read", args: { path: "src/b.ts" } }],
+    ]);
+    expect(describeActivity(reading, "some streamed text")).toBe("reading src/a.ts, reading src/b.ts…");
   });
 
   it("falls back to thinking… with no tools and no text", () => {
     expect(describeActivity(noTools, "")).toBe("thinking…");
     expect(describeActivity(noTools, "\n \n")).toBe("thinking…");
+  });
+});
+
+describe("describeActivity tool phrases", () => {
+  const calls = (list: [string, ActiveToolCall][]) => new Map<string, ActiveToolCall>(list);
+
+  it("names the file an edit targets", () => {
+    const active = calls([["c1", { toolName: "edit", args: { path: "src/auth.ts", edits: [] } }]]);
+    expect(describeActivity(active)).toBe("editing src/auth.ts…");
+  });
+
+  it("shows the command's first words for bash", () => {
+    const active = calls([["c1", { toolName: "bash", args: { command: "npm run check --silent" } }]]);
+    expect(describeActivity(active)).toBe("running npm run check…");
+  });
+
+  it("falls back to the generic verb when bash has no command", () => {
+    expect(describeActivity(calls([["c1", { toolName: "bash" }]]))).toBe("running command…");
+  });
+
+  it("quotes search patterns", () => {
+    const active = calls([["c1", { toolName: "grep", args: { pattern: "max turns" } }]]);
+    expect(describeActivity(active)).toBe("searching 'max turns'…");
+  });
+
+  it("uses the raw tool name for unmapped tools, with or without args", () => {
+    expect(describeActivity(calls([["c1", { toolName: "web_search" }]]))).toBe("web_search…");
+    expect(describeActivity(calls([["c1", { toolName: "document_parse", args: { path: "doc.pdf" } }]]))).toBe("document_parse…");
+  });
+
+  it("joins distinct phrases and counts the overflow", () => {
+    const active = calls([
+      ["c1", { toolName: "edit", args: { path: "a.ts" } }],
+      ["c2", { toolName: "read", args: { path: "b.ts" } }],
+      ["c3", { toolName: "grep", args: { pattern: "x" } }],
+      ["c4", { toolName: "bash", args: { command: "npm test" } }],
+    ]);
+    expect(describeActivity(active)).toBe("editing a.ts, reading b.ts, searching 'x' +1 more…");
+  });
+
+  it("deduplicates identical phrases", () => {
+    const active = calls([
+      ["c1", { toolName: "read", args: { path: "a.ts" } }],
+      ["c2", { toolName: "read", args: { path: "a.ts" } }],
+    ]);
+    expect(describeActivity(active)).toBe("reading a.ts…");
+  });
+
+  it("clamps the joined phrase to 60 chars", () => {
+    const active = calls([["c1", { toolName: "edit", args: { path: `${"d/".repeat(30)}file.ts` } }]]);
+    const text = describeActivity(active);
+    expect(text.length).toBeLessThanOrEqual(60);
+    expect(text.endsWith("…")).toBe(true);
+  });
+});
+
+describe("createActivityTracker", () => {
+  it("pairs start/end by toolCallId, leaving same-name calls alone", () => {
+    const { state, callbacks } = createActivityTracker();
+    callbacks.onToolActivity({ type: "start", toolName: "read", toolCallId: "t1", args: { path: "a.ts" } });
+    callbacks.onToolActivity({ type: "start", toolName: "read", toolCallId: "t2", args: { path: "b.ts" } });
+    expect(state.activeTools.get("t1")).toEqual({ toolName: "read", args: { path: "a.ts" } });
+    callbacks.onToolActivity({ type: "end", toolName: "read", toolCallId: "t1" });
+    expect([...state.activeTools.keys()]).toEqual(["t2"]);
+    expect(state.toolUses).toBe(1);
+  });
+
+  it("matches ends by tool name when no toolCallId is given", () => {
+    const { state, callbacks } = createActivityTracker();
+    callbacks.onToolActivity({ type: "start", toolName: "grep" });
+    callbacks.onToolActivity({ type: "end", toolName: "grep" });
+    expect(state.activeTools.size).toBe(0);
+    expect(state.toolUses).toBe(1);
+  });
+
+  it("clears responseText when a new message starts", () => {
+    const { state, callbacks } = createActivityTracker();
+    callbacks.onTextDelta("tail of the old message", "tail of the old message");
+    expect(state.responseText).toBe("tail of the old message");
+    callbacks.onMessageStart();
+    expect(state.responseText).toBe("");
   });
 });
 

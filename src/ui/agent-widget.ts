@@ -53,9 +53,16 @@ export type UICtx = {
   ): void;
 };
 
+/** One in-flight tool call, as the activity subtext sees it. */
+export interface ActiveToolCall {
+  toolName: string;
+  /** The call's arguments as sent, when the runner forwarded them. */
+  args?: unknown;
+}
+
 /** Per-agent live activity state. */
 export interface AgentActivity {
-  activeTools: Map<string, string>;
+  activeTools: Map<string, ActiveToolCall>;
   toolUses: number;
   responseText: string;
   session?: SessionLike;
@@ -248,24 +255,51 @@ function truncateLine(text: string, len = 60): string {
   return line.slice(0, len) + "…";
 }
 
-/** Build a human-readable activity string from currently-running tools or response text. */
-export function describeActivity(activeTools: Map<string, string>, responseText?: string): string {
-  if (activeTools.size > 0) {
-    const groups = new Map<string, number>();
-    for (const toolName of activeTools.values()) {
-      const action = TOOL_DISPLAY[toolName] ?? toolName;
-      groups.set(action, (groups.get(action) ?? 0) + 1);
+/** The part of a tool call's args worth naming in the subtext: the file, the pattern, or the command's first words. */
+function argHint(toolName: string, args: unknown): string | undefined {
+  if (typeof args !== "object" || args === null) return undefined;
+  const a = args as Record<string, unknown>;
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim() ? v.trim() : undefined;
+  switch (toolName) {
+    case "read":
+    case "edit":
+    case "write":
+    case "ls":
+      return str(a.path);
+    case "bash":
+      // First words only: `npm run check`, not the whole multi-line script.
+      return str(a.command)?.split(/\s+/).slice(0, 3).join(" ");
+    case "grep":
+    case "find": {
+      const pattern = str(a.pattern);
+      return pattern && `'${pattern}'`;
     }
+    default:
+      return undefined;
+  }
+}
 
-    const parts: string[] = [];
-    for (const [action, count] of groups) {
-      if (count > 1) {
-        parts.push(`${action} ${count} ${action === "searching" ? "patterns" : "files"}`);
-      } else {
-        parts.push(action);
-      }
+/** One active call as a verb phrase: `editing src/foo.ts`, `running npm test`. */
+function describeToolCall(call: ActiveToolCall): string {
+  const action = TOOL_DISPLAY[call.toolName] ?? call.toolName;
+  const hint = argHint(call.toolName, call.args);
+  if (call.toolName === "bash") return hint ? `running ${hint}` : action;
+  return hint ? `${action} ${hint}` : action;
+}
+
+/** Activity subtext: tool calls as verb phrases (`editing src/foo.ts`), else the last streamed output line. */
+export function describeActivity(activeTools: Map<string, ActiveToolCall>, responseText?: string): string {
+  if (activeTools.size > 0) {
+    const phrases: string[] = [];
+    for (const call of activeTools.values()) {
+      const phrase = describeToolCall(call);
+      if (!phrases.includes(phrase)) phrases.push(phrase);
     }
-    return parts.join(", ") + "…";
+    const shown = phrases.slice(0, 3).join(", ");
+    const more = phrases.length - 3;
+    const text = more > 0 ? `${shown} +${more} more` : shown;
+    return text.length <= 60 ? `${text}…` : `${text.slice(0, 59)}…`;
   }
 
   // No tools active — show truncated response text if available

@@ -59,7 +59,7 @@ export function finalTurnError(session: AgentSession, startIndex = 0): string | 
 }
 
 /** The per-run callbacks a spawn and a resume share, plus the resolved turn limit. */
-export type RunObserverOptions = Pick<RunOptions, "onTurnEnd" | "onTextDelta" | "onToolActivity" | "onAssistantUsage" | "onCompaction"> & {
+export type RunObserverOptions = Pick<RunOptions, "onTurnEnd" | "onTextDelta" | "onToolActivity" | "onMessageStart" | "onAssistantUsage" | "onCompaction"> & {
   /** Already resolved: undefined = unlimited. */
   maxTurns?: number;
 };
@@ -97,16 +97,17 @@ export function observeRun(session: AgentSession, options: RunObserverOptions): 
     }
     if (event.type === "message_start") {
       currentMessageText = "";
+      options.onMessageStart?.();
     }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       currentMessageText += event.assistantMessageEvent.delta;
       options.onTextDelta?.(event.assistantMessageEvent.delta, currentMessageText);
     }
     if (event.type === "tool_execution_start") {
-      options.onToolActivity?.({ type: "start", toolName: event.toolName });
+      options.onToolActivity?.({ type: "start", toolName: event.toolName, toolCallId: event.toolCallId, args: event.args });
     }
     if (event.type === "tool_execution_end") {
-      options.onToolActivity?.({ type: "end", toolName: event.toolName });
+      options.onToolActivity?.({ type: "end", toolName: event.toolName, toolCallId: event.toolCallId });
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
       const u = (event.message as any).usage;

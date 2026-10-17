@@ -223,6 +223,7 @@ export interface SpawnOptions {
   onSpawned?: (id: string) => void;
   onQueued?: (id: string, ahead: number) => void;
   onToolActivity?: (activity: ToolActivity) => void;
+  onMessageStart?: () => void;
   onTextDelta?: (delta: string, fullText: string) => void;
   onSessionCreated?: (session: AgentSession) => void;
   onTurnEnd?: (turnCount: number) => void;
@@ -240,6 +241,8 @@ export interface ResumeOptions {
   maxTurns?: number;
   onTurnEnd?: (turnCount: number) => void;
   onToolActivity?: (activity: ToolActivity) => void;
+  onMessageStart?: () => void;
+  onTextDelta?: (delta: string, fullText: string) => void;
   onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
   onCompaction?: (info: CompactionInfo) => void;
   onStarted?: () => void;

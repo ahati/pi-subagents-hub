@@ -55,56 +55,9 @@ export function formatLifetimeTokens(o: { lifetimeUsage: LifetimeUsage }): strin
   return t > 0 ? formatTokens(t) : "";
 }
 
-/**
- * Create an AgentActivity state and spawn callbacks for tracking tool usage.
- * Used by both foreground and background paths to avoid duplication.
- * Exported for the activity-tracking tests: it is the counter that decides
- * whether a `warning` probe becomes a tool use.
- */
-export function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
-  const state: AgentActivity = {
-    activeTools: new Map(),
-    toolUses: 0,
-    turnCount: 1,
-    maxTurns,
-    responseText: "",
-    session: undefined,
-  };
-
-  const callbacks = {
-    onToolActivity: (activity: { type: "start" | "end" | "warning"; toolName: string }) => {
-      if (activity.type === "start") {
-        state.activeTools.set(activity.toolName + "_" + Date.now(), activity.toolName);
-      } else if (activity.type === "end") {
-        for (const [key, name] of state.activeTools) {
-          if (name === activity.toolName) { state.activeTools.delete(key); break; }
-        }
-        state.toolUses++;
-      }
-      // A "warning" probe (model-error/tools-error/extension-error) is a
-      // one-shot diagnostic, not a tool use: nothing to paint, nothing to count.
-      onStreamUpdate?.();
-    },
-    onTextDelta: (_delta: string, fullText: string) => {
-      state.responseText = fullText;
-      onStreamUpdate?.();
-    },
-    onTurnEnd: (turnCount: number) => {
-      state.turnCount = turnCount;
-      onStreamUpdate?.();
-    },
-    onSessionCreated: (session: unknown) => {
-      state.session = session as AgentActivity["session"];
-    },
-    // Spend is accumulated on the AgentRecord (agent-manager), which is what
-    // every surface reads; this callback exists here only to repaint on it.
-    onAssistantUsage: (_usage: LifetimeUsage) => {
-      onStreamUpdate?.();
-    },
-  };
-
-  return { state, callbacks };
-}
+// Moved to activity.ts — a leaf module, so the workflow host can import it without
+// dragging renderers' workflow-graph imports into a module-init cycle.
+export { createActivityTracker } from "./activity.js";
 
 /**
  * Advertised thinking levels, ordered to mirror pi-ai's EXTENDED_THINKING_LEVELS

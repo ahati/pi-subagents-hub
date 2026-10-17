@@ -407,7 +407,7 @@ describe("the run's state mark and its item cursor", () => {
     h.press("\r"); // page W
     const pane = runPane(h.frame());
     // The LAST tool result's last line — not the opener, not "thinking…".
-    expect(pane).toContain("↳ routes.ts: 14 refs");
+    expect(pane).toContain("↳ api.ts: 120 refs");
     expect(pane).not.toContain("I'll start by");
     expect(pane).not.toContain("thinking…");
     // Two assistant messages → turn 2, derived where no tracker exists.
@@ -1222,7 +1222,7 @@ describe("P8 — transcript grammar parity and refusal behavior", () => {
           startedAt: Date.now() - 60_000, tokens: 500,
         }],
         workflowRun: () => runSource(),
-        agentActivity: new Map([["r1", { turnCount: 2, activeTools: new Map([["t1", "editing db.ts"]]), responseText: "" } as never]]),
+        agentActivity: new Map([["r1", { turnCount: 2, toolUses: 0, activeTools: new Map([["t1", { toolName: "edit", args: { path: "db.ts" } }]]), responseText: "" } as never]]),
       },
     );
     h.open();

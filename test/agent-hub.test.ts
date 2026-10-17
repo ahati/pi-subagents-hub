@@ -893,7 +893,7 @@ describe("agent hub roster", () => {
   it("activity tab describes what each agent is doing", () => {
     const activity = new Map<string, AgentActivity>([[
       "a1",
-      { activeTools: new Map([["call-1", "read"]]), toolUses: 3, responseText: "", turnCount: 2 },
+      { activeTools: new Map([["call-1", { toolName: "read" }]]), toolUses: 3, responseText: "", turnCount: 2 },
     ]]);
     const h = harness([makeRecord({ id: "a1" })], { agentActivity: activity });
     h.open();

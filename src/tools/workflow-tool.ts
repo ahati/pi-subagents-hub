@@ -8,7 +8,7 @@ import { SUBAGENT_TOOL_NAMES } from "../agent-runner.js";
 import type { CompletionOutbox } from "../completion-outbox.js";
 import { textResult, WORKFLOW_FILE_FLAG } from "../entry/renderers.js";
 import { sessionTaskDir } from "../output-file.js";
-import type { AgentWidget } from "../ui/agent-widget.js";
+import type { AgentActivity, AgentWidget } from "../ui/agent-widget.js";
 import type { FleetList, FleetWorkflow } from "../ui/fleet-list.js";
 import { renderWorkflowCard } from "../ui/workflow-card.js";
 import { decideWorkflowCollision } from "../workflow/collisions.js";
@@ -40,6 +40,7 @@ export interface WorkflowToolDeps {
   widget: AgentWidget;
   fleet: FleetList;
   outbox: CompletionOutbox;
+  agentActivity: Map<string, AgentActivity>;
   isWorkflowsEnabled: () => boolean;
   isWorkflowsPinned: () => boolean;
   setWorkflowsDisabledByCollision: () => void;
@@ -64,6 +65,7 @@ export async function runWorkflowTask(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   manager: AgentManager,
+  agentActivity: Map<string, AgentActivity>,
   task: WorkflowTask,
 ): Promise<void> {
   try {
@@ -78,6 +80,7 @@ export async function runWorkflowTask(
         signal: task.abortController.signal,
         rootSessionId: ctx.sessionManager.getSessionId(),
         workflowId: task.id,
+        agentActivity,
       }),
       onProgress: entries => updateWorkflowProgressBatch(task, entries),
       onControl: control => { task.control = control; },
@@ -128,6 +131,7 @@ export function createWorkflowTool(deps: WorkflowToolDeps) {
     widget,
     fleet,
     outbox,
+    agentActivity,
     isWorktreeIsolationEnabled,
     isSchedulingEnabled,
   } = deps;
@@ -285,7 +289,7 @@ export function createWorkflowTool(deps: WorkflowToolDeps) {
       widget.update();
       fleet.update();
 
-      void runWorkflowTask(pi, ctx, manager, task).then(() => notifyWorkflowFinished(task, widget, fleet, outbox));
+      void runWorkflowTask(pi, ctx, manager, agentActivity, task).then(() => notifyWorkflowFinished(task, widget, fleet, outbox));
 
       return {
         content: [{
@@ -360,6 +364,7 @@ export function runWorkflowFlag(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   manager: AgentManager,
+  agentActivity: Map<string, AgentActivity>,
   workflowTasks: Map<string, WorkflowTask>,
   widget: AgentWidget,
   fleet: FleetList,
@@ -413,7 +418,7 @@ export function runWorkflowFlag(
   fleet.update();
   report(`Running workflow ${meta.name}…`, "info");
 
-  void runWorkflowTask(pi, ctx, manager, task).then(() => {
+  void runWorkflowTask(pi, ctx, manager, agentActivity, task).then(() => {
     pi.appendEntry<WorkflowEntryData>(WORKFLOW_ENTRY_TYPE, workflowEntryData(task));
     pi.sendMessage({
       customType: "workflow-result",

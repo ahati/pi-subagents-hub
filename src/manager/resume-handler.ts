@@ -153,6 +153,8 @@ export async function resumeRecord(
       if (activity.type === "end") record.toolUses++;
       options?.onToolActivity?.(activity);
     },
+    onMessageStart: options?.onMessageStart,
+    onTextDelta: options?.onTextDelta,
     onAssistantUsage: (usage: LifetimeUsage) => {
       addUsage(record.lifetimeUsage, usage);
       onUsage?.(record, usage);
@@ -230,6 +232,8 @@ export function startResume(
       if (activity.type === "end") record.toolUses++;
       options.onToolActivity?.(activity);
     },
+    onMessageStart: options.onMessageStart,
+    onTextDelta: options.onTextDelta,
     onAssistantUsage: (usage: LifetimeUsage) => {
       addUsage(record.lifetimeUsage, usage);
       onUsage?.(record, usage);
