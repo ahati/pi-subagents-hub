@@ -18,7 +18,7 @@
  * The disk is the assertion surface: the manifest, the child session file's
  * content before and after the continuation, and the parent's follow-up turn.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxText, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
@@ -474,4 +474,170 @@ describe("/pause → quit → reload → /continue (real pi sessions, faux model
       await run1.dispose().catch(() => {});
     }
   });
+
+  it("parks workflow between subagent tool-call turns, verifies cached tool calls are bypassed and pending tool calls execute on /continue", async () => {
+    const wfScript = [
+      'export const meta = { name: "wf-tool-continue", description: "exercises tool calls across pause and continue" };',
+      'const step1 = await agent("WORKFLOW_STEP1_PROMPT");',
+      'const step2 = await agent("WORKFLOW_STEP2_PROMPT");',
+      'return JSON.stringify({ step1, step2 });',
+    ].join("\n");
+
+    let releaseStep2!: () => void;
+    const step2Held = new Promise<string>(resolve => {
+      releaseStep2 = () => resolve("step2 held release");
+    });
+
+    let step1ToolInvocationsRun1 = 0;
+    let step2SeenRun1 = false;
+
+    function toolResultCount(context: { messages?: Array<{ role?: string; toolName?: string }> }, toolName: string): number {
+      return (context.messages ?? []).filter(
+        m => m.role === "toolResult" && m.toolName === toolName,
+      ).length;
+    }
+
+    const run1 = await runPrintMode({
+      live: false,
+      cwd,
+      prompt: "orchestrator start",
+      hold: false,
+      maxModelCalls: 32,
+      sessionManager: SessionManager.create(cwd, sessionDir),
+      respond: context => {
+        const isParent = getCurrentTools(context.messages).some(t => t.name === "SubagentWorkflow");
+        if (isParent) {
+          const txt = asText(context);
+          if (txt.includes("run tool workflow")) {
+            return txt.includes("Task ID")
+              ? fauxText("tool wf started")
+              : fauxToolCall("SubagentWorkflow", { script: wfScript });
+          }
+          return fauxText("ready");
+        }
+        const txt = asText(context);
+        if (txt.includes("WORKFLOW_STEP1_PROMPT")) {
+          if (toolResultCount(context, "bash") === 0) {
+            step1ToolInvocationsRun1++;
+            return fauxToolCall("bash", { command: "echo step1_payload" }, { id: "tc-s1" });
+          }
+          return fauxText("step1_done");
+        }
+        if (txt.includes("WORKFLOW_STEP2_PROMPT")) {
+          step2SeenRun1 = true;
+          return step2Held;
+        }
+        return "other child";
+      },
+    });
+
+    try {
+      // 1. Start workflow in run 1.
+      await run1.parentSession.prompt("run tool workflow");
+
+      // Wait for step 1 to execute its tool call, complete, and step 2 to start.
+      await waitFor(() => step1ToolInvocationsRun1 === 1 && step2SeenRun1);
+
+      // 2. Issue /pause while step 2 is in-flight.
+      await run1.parentSession.prompt("/pause");
+
+      const sessionId1 = run1.parentSession.sessionManager.getSessionId();
+      const parentSessionFile = run1.parentSession.sessionManager.getSessionFile();
+      const manifestPath = resolvePauseStorePath(cwd, sessionId1);
+
+      const store1 = new PauseStore(manifestPath);
+      const parkedWorkflows = store1.listWorkflows();
+      expect(parkedWorkflows).toHaveLength(1);
+
+      const journalPath = parkedWorkflows[0].journalPath;
+      expect(existsSync(journalPath)).toBe(true);
+      // Step 1's tool execution must already be recorded in the journal.
+      const entries1 = readJournal(journalPath);
+      expect(entries1).toHaveLength(1);
+      expect(entries1[0].ok).toBe(true);
+      expect(entries1[0].text).toBe("step1_done");
+
+      // Release held step 2 and shut down run 1.
+      releaseStep2();
+      await run1.dispose();
+
+      // 3. Boot run 2: reload parent session and run /continue.
+      let step1ToolInvocationsRun2 = 0;
+      let step2ToolInvocationsRun2 = 0;
+      let step2CompletedRun2 = false;
+
+      const run2 = await runPrintMode({
+        live: false,
+        cwd,
+        prompt: "/continue",
+        hold: false,
+        maxModelCalls: 32,
+        sessionManager: SessionManager.open(parentSessionFile, sessionDir),
+        respond: context => {
+          const isParent = getCurrentTools(context.messages).some(t => t.name === "SubagentWorkflow");
+          if (isParent) return "Acknowledged.";
+          const txt = asText(context);
+          if (txt.includes("WORKFLOW_STEP1_PROMPT")) {
+            // Step 1 MUST NOT be invoked in run 2 (it is replayed from journal cache).
+            step1ToolInvocationsRun2++;
+            return fauxText("ERROR_STEP1_SHOULD_HAVE_BEEN_CACHED");
+          }
+          if (txt.includes("WORKFLOW_STEP2_PROMPT")) {
+            if (toolResultCount(context, "bash") === 0) {
+              step2ToolInvocationsRun2++;
+              return fauxToolCall("bash", { command: "echo step2_payload" }, { id: "tc-s2" });
+            }
+            step2CompletedRun2 = true;
+            return fauxText("step2_done");
+          }
+          return "other child";
+        },
+      });
+
+      try {
+        // Wait for manifest to clear.
+        await waitFor(() => new PauseStore(manifestPath).listWorkflows().length === 0);
+
+        // Wait for Step 2 to execute its tool and complete live.
+        await waitFor(() => step2CompletedRun2);
+
+        // Verification:
+        // - Step 1 tool was executed in run 1, but NEVER invoked in run 2 (cached from journal).
+        expect(step1ToolInvocationsRun1).toBe(1);
+        expect(step1ToolInvocationsRun2).toBe(0);
+
+        // - Step 2 tool was executed live in run 2.
+        expect(step2ToolInvocationsRun2).toBe(1);
+
+        // - Both steps are recorded in the resumed run's journal on disk.
+        const taskDir = join(journalPath, "..");
+        let resumedJournalPath = "";
+        await waitFor(() => {
+          const journalFiles = readdirSync(taskDir).filter(f => f.endsWith(".workflow.jsonl"));
+          const resumedFile = journalFiles.find(f => join(taskDir, f) !== journalPath);
+          if (!resumedFile) return false;
+          resumedJournalPath = join(taskDir, resumedFile);
+          return readJournal(resumedJournalPath).length === 2;
+        });
+
+        const finalEntries = readJournal(resumedJournalPath);
+        expect(finalEntries).toHaveLength(2);
+        expect(finalEntries[0].text).toBe("step1_done");
+        expect(finalEntries[1].text).toBe("step2_done");
+
+        // - Parent session received the final result with both steps.
+        await waitFor(() =>
+          conversationText(run2.parentSession).includes("step1_done") ||
+          conversationText(run2.parentSession).includes("step2_done") ||
+          conversationText(run2.parentSession).includes("wf-tool-continue"),
+        );
+      } finally {
+        await run2.dispose();
+      }
+    } finally {
+      releaseStep2();
+      await run1.dispose().catch(() => {});
+    }
+  });
 });
+
