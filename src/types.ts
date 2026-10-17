@@ -97,6 +97,13 @@ export interface AgentConfig {
 export type JoinMode = 'async' | 'group' | 'smart';
 
 /**
+ * UI chrome and layout style.
+ * - `pi`: native Pi styling (edge-to-edge horizontal rules, no outer vertical side rails, themed footer).
+ * - `claude`: Claude Code box styling (rounded corners `╭───╮`, outer `│` rails).
+ */
+export type UIStyle = 'pi' | 'claude';
+
+/**
  * Display mode for the persistent above-editor agent widget.
  * - `all`: show every agent (foreground + background).
  * - `background`: hide foreground agents (they already render inline as the

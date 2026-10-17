@@ -17,7 +17,7 @@ import { type AgentSession, getMarkdownTheme } from "@earendil-works/pi-coding-a
 import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, stripTerminalSequences, type TUI, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderAgentRecordName } from "../agent-color.js";
 import { extractText } from "../context.js";
-import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
+import type { AgentRecord, UIStyle, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../usage.js";
 import type { Theme } from "./agent-widget.js";
 import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
@@ -98,6 +98,13 @@ export interface ConversationViewerOptions {
    * terminals. Defaults to framed.
    */
   frameless?: boolean | (() => boolean);
+  /**
+   * UI chrome style:
+   * - "pi": edge-to-edge horizontal borders (DynamicBorder), no outer │ rails.
+   * - "claude": Claude Code rounded boxes (╭─╮ / │ │ / ╰─╯).
+   * Defaults to "pi".
+   */
+  uiStyle?: UIStyle | (() => UIStyle);
   /**
    * Called for every key the viewer itself does not handle (after the composer,
    * which always wins while open). Return `true` to consume the key — this is
@@ -705,6 +712,7 @@ export class ConversationViewer implements Component, Focusable {
     // spanning its own panes, so this viewer contributes content rows only —
     // no `╭─╮` top/bottom, no side `│`; every line pads to the full width.
     const frameless = this.framelessNow();
+    const isPi = this.uiStyleNow() === "pi";
     const innerW = this.fullscreen ? this.scrollView.getContentWidth(width - 1) : frameless ? width : width - 4; // border + padding
     this.lastInnerW = innerW;
     const lines: string[] = [];
@@ -720,10 +728,11 @@ export class ConversationViewer implements Component, Focusable {
         return " " + truncateToWidth(content, contentWidth, scrollbar ? "" : "...", true) + (scrollbar ?? "");
       }
       if (frameless) return truncateToWidth(pad(content, innerW), innerW, "...", true);
+      if (isPi) return "  " + truncateToWidth(pad(content, innerW), innerW, "...", true) + "  ";
       return th.fg("border", "│") + " " + truncateToWidth(pad(content, innerW), innerW, "...", true) + " " + th.fg("border", "│");
     };
-    const hrTop = th.fg("border", `╭${"─".repeat(width - 2)}╮`);
-    const hrBot = th.fg("border", `╰${"─".repeat(width - 2)}╯`);
+    const hrTop = th.fg("border", isPi ? "─".repeat(width) : `╭${"─".repeat(width - 2)}╮`);
+    const hrBot = th.fg("border", isPi ? "─".repeat(width) : `╰${"─".repeat(width - 2)}╯`);
     const hrMid = row(th.fg("dim", "─".repeat(innerW)));
 
     if (!this.fullscreen && !frameless) lines.push(hrTop);
@@ -854,6 +863,12 @@ export class ConversationViewer implements Component, Focusable {
   private framelessNow(): boolean {
     const flag = this.options?.frameless;
     return typeof flag === "function" ? flag() : !!flag;
+  }
+
+  /** UI style: "pi" or "claude". Defaults to "pi". */
+  private uiStyleNow(): UIStyle {
+    const style = this.options?.uiStyle;
+    return typeof style === "function" ? style() : (style ?? "pi");
   }
 
   /** Whether the viewer draws its own footer row (and the rule above it). */

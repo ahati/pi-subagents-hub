@@ -9,7 +9,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { renderAgentRecordName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
 import { getConfig } from "../agent-types.js";
-import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
+import type { AgentInvocation, SubagentType, UIStyle, WidgetMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
 
 // ---- Constants ----
@@ -42,6 +42,7 @@ export type Theme = {
 };
 
 export type UICtx = {
+  readonly theme?: Theme;
   setStatus(key: string, text: string | undefined): void;
   setWidget(
     key: string,
@@ -314,6 +315,7 @@ export class AgentWidget {
      * conversation viewer unconditionally.
      */
     private showModel: () => boolean = () => false,
+    private uiStyle: () => UIStyle = () => "pi",
   ) {}
 
   /**
@@ -644,7 +646,21 @@ export class AgentWidget {
       if (runningCount > 0) statusParts.push(`${runningCount} running`);
       if (queuedCount > 0) statusParts.push(`${queuedCount} queued`);
       const total = runningCount + queuedCount;
-      newStatusText = `${statusParts.join(", ")} agent${total === 1 ? "" : "s"}`;
+      const countLabel = `${statusParts.join(", ")} agent${total === 1 ? "" : "s"}`;
+      const th = this.uiCtx.theme;
+      const isPi = (this.uiStyle?.() ?? "pi") === "pi";
+      if (th && isPi) {
+        try {
+          const icon = runningCount > 0
+            ? th.fg("accent", SPINNER[this.widgetFrame % SPINNER.length] ?? "●")
+            : th.fg("muted", "◦");
+          newStatusText = `${icon} ${th.fg("dim", countLabel)}`;
+        } catch {
+          newStatusText = countLabel;
+        }
+      } else {
+        newStatusText = countLabel;
+      }
     }
     if (newStatusText !== this.lastStatusText) {
       this.uiCtx.setStatus("subagents", newStatusText);

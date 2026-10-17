@@ -42,7 +42,7 @@ import { continueSessionBare, countUnansweredToolCalls, finalReportFromSessionFi
 import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { shadowToolsFactory } from "./shadow-tools.js";
 import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
-import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type AgentTombstone, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
+import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type AgentTombstone, type JoinMode, type NotificationDetails, type SubagentType, type UIStyle, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
 import {
   type AgentActivity,
@@ -1287,6 +1287,11 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  // UI style: "pi" (native edge-to-edge rules and footer status) or "claude" (rounded box corners, side rails, plain status)
+  let uiStyle: UIStyle = bootSettings.uiStyle ?? "pi";
+  function getUIStyle(): UIStyle { return uiStyle; }
+  function setUIStyle(s: UIStyle): void { uiStyle = s; widget.update(); fleet.update(); }
+
   // Live widget: show running agents above editor.
   // widgetMode (default "background") selects what the widget shows: "all" =
   // every agent; "background" = hide foreground (they already render inline as
@@ -1294,7 +1299,7 @@ export default function (pi: ExtensionAPI) {
   // everything else; "off" = hide the widget entirely. Read live at render time.
   let widgetMode: WidgetMode = "background";
   function getWidgetMode(): WidgetMode { return widgetMode; }
-  const widget = new AgentWidget(manager, agentActivity, getWidgetMode, isShowCostEnabled, isShowModelEnabled);
+  const widget = new AgentWidget(manager, agentActivity, getWidgetMode, isShowCostEnabled, isShowModelEnabled, getUIStyle);
   function setWidgetMode(m: WidgetMode): void { widgetMode = m; widget.update(); }
 
   /**
@@ -1385,7 +1390,7 @@ export default function (pi: ExtensionAPI) {
   // one opened from `/agents`: same settings on the way in, same persist out.
   const fleet = new FleetList(manager, agentActivity, isShowCostEnabled, getViewerMarkdown,
     (mode) => chooseViewerMarkdown(mode, currentCtx as unknown as ExtensionCommandContext | undefined),
-    getFullscreenScrollbar, backgroundActionFor);
+    getFullscreenScrollbar, backgroundActionFor, getUIStyle);
   // The `p` key rides the same funnel as `/agents pause|resume` — one place
   // that emits `subagents:paused` and decides refusals. Refusals surface as
   // the returned reason, which the surfaces turn into their own feedback.
@@ -1708,6 +1713,7 @@ export default function (pi: ExtensionAPI) {
       setViewerMarkdown,
       setPackageAgents: setPackageAgentsGate,
       setPackageWorkflows: setPackageWorkflowsGate,
+      setUIStyle,
     },
     (event, payload) => pi.events.emit(event, payload),
   );
@@ -5031,6 +5037,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       viewerMarkdown: getViewerMarkdown(),
       packageAgents: getPackageAgentsGate(),
       packageWorkflows: getPackageWorkflowsGate(),
+      uiStyle: getUIStyle(),
     } satisfies SubagentsSettings;
   }
 
@@ -5253,6 +5260,13 @@ Write the file using the write tool. Only write the file, nothing else.`;
           values: ["off", "assistant", "all"],
         },
         {
+          id: "uiStyle",
+          label: "UI style",
+          description: "Visual chrome style: pi (native edge-to-edge rules and footer status) or claude (rounded box corners, side rails, and plain status)",
+          currentValue: getUIStyle(),
+          values: ["pi", "claude"],
+        },
+        {
           id: "fleetView",
           label: "Fleet view",
           description: "Claude Code-style main+subagents list below the editor (↓/← to navigate, Enter to view)",
@@ -5443,6 +5457,9 @@ Write the file using the write tool. Only write the file, nothing else.`;
       } else if (id === "viewerMarkdown") {
         setViewerMarkdown(value as ViewerMarkdownMode);
         notifyApplied(ctx, `Viewer markdown set to ${value}`);
+      } else if (id === "uiStyle") {
+        setUIStyle(value as UIStyle);
+        notifyApplied(ctx, `UI style set to ${value}`);
       } else if (id === "fleetView") {
         const enabled = value === "on";
         setFleetViewEnabled(enabled);

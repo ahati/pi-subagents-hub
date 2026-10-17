@@ -141,6 +141,7 @@ export interface WorkflowCardSegment {
   text: string;
   color?: WorkflowCardColor;
   bold?: boolean;
+  bg?: "selectedBg";
 }
 
 export type WorkflowCardLine = WorkflowCardSegment[];

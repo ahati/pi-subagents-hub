@@ -65,12 +65,13 @@ interface Harness {
   settled(): boolean;
 }
 
-function harness(agents: AgentRecord[], depsOver: Partial<AgentHubDeps> = {}, opts: { tuiMode?: string } = {}) {
+function harness(agents: AgentRecord[], depsOver: Partial<AgentHubDeps> = {}, opts: { tuiMode?: string; theme?: any } = {}) {
   const fakeTui = {
     mode: opts.tuiMode ?? "regular",
     requestRender: vi.fn(),
     terminal: { columns: 120, rows: 40, write: vi.fn() },
   };
+  const activeTheme = opts.theme ?? theme;
   const components: Harness["components"] = [];
   const optionSets: Harness["optionSets"] = [];
   let settled = false;
@@ -85,7 +86,7 @@ function harness(agents: AgentRecord[], depsOver: Partial<AgentHubDeps> = {}, op
           settled = true;
           resolve(undefined);
         };
-        components.push(factory(fakeTui, theme, undefined, done) as Harness["components"][number]);
+        components.push(factory(fakeTui, activeTheme, undefined, done) as Harness["components"][number]);
       });
     }),
   };
@@ -95,6 +96,7 @@ function harness(agents: AgentRecord[], depsOver: Partial<AgentHubDeps> = {}, op
     manager,
     agentActivity: new Map<string, AgentActivity>(),
     showCost: false,
+    uiStyle: () => "claude",
     ...depsOver,
   };
 
@@ -119,6 +121,7 @@ function harness(agents: AgentRecord[], depsOver: Partial<AgentHubDeps> = {}, op
       for (let i = 0; i < 4; i++) await Promise.resolve();
     },
     frame: (width = 120) => (components.at(-1)?.render(width) ?? []).map(plain),
+    rawFrame: (width = 120) => components.at(-1)?.render(width) ?? [],
     press: (data: string) => components.at(-1)?.handleInput(data),
   };
 }
@@ -578,10 +581,65 @@ describe("agent hub open modes", () => {
   it("opens full-screen on the roster when no agent is given (/agents entry)", () => {
     const h = harness([makeRecord()]);
     h.open();
-    expect(h.optionSets[0]?.overlayOptions).toMatchObject({ width: "100%", maxHeight: "100%" });
+    expect(h.optionSets[0]?.overlayOptions).toMatchObject({
+      anchor: "top-left",
+      width: "100%",
+      maxHeight: "100%",
+      row: 0,
+      col: 0,
+      margin: 0,
+    });
     const frame = h.frame(240).join("\n");
     expect(frame).toContain("Agents & Workflows");
     expect(frame).toContain("Sleep then report 1");
+  });
+
+  it("renders popup with unicode box borders and outer vertical rails even under uiStyle: pi", () => {
+    const h = harness([makeRecord({ id: "a1" })], { uiStyle: () => "pi" });
+    h.open({ agentId: "a1", popup: true });
+    const frame = h.frame(120);
+    // Top border has rounded corners
+    expect(frame[0].startsWith("╭")).toBe(true);
+    expect(frame[0].endsWith("╮")).toBe(true);
+    // Middle rows have vertical rails
+    for (let i = 1; i < frame.length - 1; i++) {
+      expect(frame[i].startsWith("│")).toBe(true);
+      expect(frame[i].endsWith("│")).toBe(true);
+    }
+    // Bottom border has rounded corners
+    expect(frame.at(-1)?.startsWith("╰")).toBe(true);
+    expect(frame.at(-1)?.endsWith("╯")).toBe(true);
+    h.components.at(-1)?.dispose?.();
+  });
+
+  it("renders fullscreen with edge-to-edge rules and no outer rails under uiStyle: pi", () => {
+    const h = harness([makeRecord({ id: "a1" })], { uiStyle: () => "pi" });
+    h.open({ agentId: "a1", popup: false });
+    const frame = h.frame(120);
+    // Top border is edge-to-edge rule with tee
+    expect(frame[0].startsWith("─")).toBe(true);
+    expect(frame[0]).toContain("┬");
+    // Middle rows have space margins on edges, no outer │ rails
+    for (let i = 1; i < frame.length - 1; i++) {
+      expect(frame[i]).not.toMatch(/^│/);
+      expect(frame[i]).not.toMatch(/│$/);
+    }
+    // Bottom border is clean edge-to-edge rule
+    expect(frame.at(-1)).toBe("─".repeat(120));
+    h.components.at(-1)?.dispose?.();
+  });
+
+  it("styles the active roster selection with selectedBg when theme supports bg", () => {
+    const customTheme = {
+      fg: (_c: string, s: string) => s,
+      bold: (s: string) => s,
+      bg: (c: string, s: string) => `[bg:${c}]${s}[/bg]`,
+    };
+    const h = harness([makeRecord({ id: "a1" })], {}, { theme: customTheme });
+    h.open({ popup: false });
+    const raw = h.rawFrame(120).join("\n");
+    expect(raw).toContain("[bg:selectedBg]");
+    h.components.at(-1)?.dispose?.();
   });
 });
 
@@ -1087,6 +1145,35 @@ describe("P8 — the escalation resize keeps state", () => {
     // The roster selection survived the whole escalation, and the hub's tick
     // interval does not outlive the test.
     expect(h.frame(120).join("\n")).toContain("❯ ● beta");
+    h.components.at(-1)?.dispose?.();
+  });
+});
+
+describe("agent hub Pi-native window chrome", () => {
+  it("renders edge-to-edge rules and no side rails in Pi native style", () => {
+    const h = harness([makeRecord({ id: "a1", alias: "worker", description: "do work" })], {
+      uiStyle: () => "pi",
+    });
+    h.open();
+    const frame = h.frame(120);
+    // Top border is edge-to-edge rule with divider tee
+    expect(frame[0].startsWith("─")).toBe(true);
+    expect(frame[0]).not.toContain("╭");
+    expect(frame[0]).not.toContain("╮");
+    expect(frame[0]).toContain("┬");
+
+    // Body rows have space margins and no outer side rails
+    const body = frame.slice(1, -3);
+    for (const row of body) {
+      expect(row).not.toMatch(/^│/);
+      expect(row).not.toMatch(/│$/);
+    }
+
+    // Bottom border is edge-to-edge rule with no rounded corners
+    const last = frame.at(-1)!;
+    expect(last).toBe("─".repeat(120));
+    expect(last).not.toContain("╰");
+    expect(last).not.toContain("╯");
     h.components.at(-1)?.dispose?.();
   });
 });

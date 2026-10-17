@@ -21,6 +21,7 @@ import {
   leftPaneWidth,
   MASTER_LIST_WIDTH,
   masterPaneGeometry,
+  PI_PANE_BOX,
   paneBodyHeight,
   paneGeometry,
   paneRightWidth,
@@ -366,3 +367,141 @@ describe("the spec's frames' footer bands", () => {
     }
   });
 });
+
+describe("Pi-native window chrome", () => {
+  const text = (line: WorkflowCardLine) => line.map(segment => segment.text).join("");
+
+  it("draws edge-to-edge horizontal borders with no box corners", () => {
+    expect(frameEdge(12, PI_PANE_BOX, "top")).toBe("─".repeat(12));
+    expect(frameEdge(12, PI_PANE_BOX, "bottom")).toBe("─".repeat(12));
+    expect(splitEdge(24, 8, PI_PANE_BOX, "top", " Agents ")).toBe(`─ Agents ┬${"─".repeat(14)}`);
+    expect(splitEdge(24, 8, PI_PANE_BOX, "bottom")).toBe(`─${"─".repeat(8)}┴${"─".repeat(14)}`);
+  });
+
+  it("renders a split window with horizontal edges, divider between panes, and space margins", () => {
+    const panes = masterPaneGeometry(60);
+    const lines = renderWindow({
+      width: 60,
+      box: PI_PANE_BOX,
+      style: "pi",
+      panes,
+      title: " Agents ",
+      rows: [
+        { kind: "split", left: [{ text: "● explore" }], right: [{ text: "details" }] },
+        { kind: "band" },
+        { kind: "full", cells: [{ text: "footer" }] },
+      ],
+    });
+
+    // Top border is edge-to-edge horizontal rule with tee
+    expect(text(lines[0])).toBe(`─ Agents ${"─".repeat(12)}┬${"─".repeat(38)}`);
+    expect(visibleWidth(text(lines[0]))).toBe(60);
+
+    // Split content row: space margin on left, pane divider in middle, space margin on right (no │ on edges)
+    expect(text(lines[1]).startsWith(" ")).toBe(true);
+    expect(text(lines[1]).endsWith(" ")).toBe(true);
+    expect(text(lines[1])).not.toMatch(/^│/);
+    expect(text(lines[1])).not.toMatch(/│$/);
+    expect(text(lines[1])).toContain("│"); // inner divider
+    expect(visibleWidth(text(lines[1]))).toBe(60);
+
+    // Band row: horizontal rule with ┴ aligned with top ┬
+    expect(text(lines[2])).toBe(`${"─".repeat(21)}┴${"─".repeat(38)}`);
+    expect(visibleWidth(text(lines[2]))).toBe(60);
+
+    // Full row: space margins, no outer │
+    expect(text(lines[3]).startsWith(" ")).toBe(true);
+    expect(text(lines[3]).endsWith(" ")).toBe(true);
+    expect(text(lines[3])).not.toContain("│");
+    expect(visibleWidth(text(lines[3]))).toBe(60);
+
+    // Bottom border is clean horizontal rule across whole width
+    expect(text(lines[4])).toBe("─".repeat(60));
+    expect(visibleWidth(text(lines[4]))).toBe(60);
+  });
+
+  it("preserves outer vertical rails and corners when UNICODE_PANE_BOX is passed, even with style: pi", () => {
+    const panes = masterPaneGeometry(60);
+    const lines = renderWindow({
+      width: 60,
+      box: UNICODE_PANE_BOX,
+      style: "pi",
+      panes,
+      title: " Agents ",
+      rows: [
+        { kind: "split", left: [{ text: "● explore" }], right: [{ text: "details" }] },
+        { kind: "band" },
+        { kind: "full", cells: [{ text: "footer" }] },
+      ],
+    });
+
+    // Top border has rounded corners
+    expect(text(lines[0])).toBe(`╭ Agents ${"─".repeat(12)}┬${"─".repeat(37)}╮`);
+    expect(visibleWidth(text(lines[0]))).toBe(60);
+
+    // Split content row: outer │ rails preserved
+    expect(text(lines[1]).startsWith("│")).toBe(true);
+    expect(text(lines[1]).endsWith("│")).toBe(true);
+    expect(visibleWidth(text(lines[1]))).toBe(60);
+
+    // Band row: outer │ rails preserved
+    expect(text(lines[2]).startsWith("│")).toBe(true);
+    expect(text(lines[2]).endsWith("│")).toBe(true);
+    expect(text(lines[2])).toContain("┴");
+    expect(visibleWidth(text(lines[2]))).toBe(60);
+
+    // Full row: outer │ rails preserved
+    expect(text(lines[3]).startsWith("│")).toBe(true);
+    expect(text(lines[3]).endsWith("│")).toBe(true);
+    expect(visibleWidth(text(lines[3]))).toBe(60);
+
+    // Bottom border has rounded corners
+    expect(text(lines[4])).toBe(`╰${"─".repeat(58)}╯`);
+    expect(visibleWidth(text(lines[4]))).toBe(60);
+  });
+});
+
+describe("segment background propagation", () => {
+  it("propagates selectedBg across padding in split pane cells", () => {
+    const lines = renderWindow({
+      width: 60,
+      box: PI_PANE_BOX,
+      style: "pi",
+      panes: { leftCellWidth: 20, pad: 1 },
+      rows: [
+        {
+          kind: "split",
+          left: [{ text: "selected agent", bg: "selectedBg" }],
+          right: [{ text: "details" }],
+        },
+      ],
+    });
+
+    const splitRow = lines[1];
+    // Leading space, text segment, and trailing padding of the left cell should all have bg: "selectedBg"
+    const leftCellSegments = splitRow.slice(1, 4);
+    expect(leftCellSegments[0]).toEqual({ text: " ", bg: "selectedBg" });
+    expect(leftCellSegments[1]).toMatchObject({ text: "selected agent", bg: "selectedBg" });
+    expect(leftCellSegments[2]?.bg).toBe("selectedBg");
+  });
+
+  it("propagates selectedBg across padding in full rows", () => {
+    const lines = renderWindow({
+      width: 60,
+      box: PI_PANE_BOX,
+      style: "pi",
+      rows: [
+        {
+          kind: "full",
+          cells: [{ text: "selected item", bg: "selectedBg" }],
+        },
+      ],
+    });
+
+    const fullRow = lines[1];
+    expect(fullRow[1]).toEqual({ text: " ", bg: "selectedBg" });
+    expect(fullRow[2]).toMatchObject({ text: "selected item", bg: "selectedBg" });
+    expect(fullRow[3]?.bg).toBe("selectedBg");
+  });
+});
+

@@ -568,3 +568,124 @@ describe("AgentWidget overflow accounting", () => {
     expect(render()).toContain("resumed description");
   });
 });
+
+describe("AgentWidget status bar", () => {
+  const theme = {
+    fg: (c: string, s: string) => `<${c}>${s}</${c}>`,
+    bold: (s: string) => s,
+  };
+
+  it("formats status bar with themed accent icon and dim label in Pi style", () => {
+    const runningAgent = {
+      id: "agent-1",
+      type: "general-purpose",
+      description: "running worker",
+      status: "running" as const,
+      toolUses: 0,
+      startedAt: Date.now(),
+    };
+    const widget = new AgentWidget(
+      { listAgents: () => [runningAgent] } as any,
+      new Map(),
+      () => "all",
+      () => false,
+      () => false,
+      () => "pi",
+    );
+    let statusText: string | undefined;
+    widget.setUICtx({
+      theme,
+      setStatus: (_k, text) => { statusText = text; },
+      setWidget: () => {},
+    });
+    widget.update();
+    expect(statusText).toBe("<accent>⠋</accent> <dim>1 running agent</dim>");
+  });
+
+  it("formats status bar as plain text in Claude style even with theme", () => {
+    const runningAgent = {
+      id: "agent-1",
+      type: "general-purpose",
+      description: "running worker",
+      status: "running" as const,
+      toolUses: 0,
+      startedAt: Date.now(),
+    };
+    const widget = new AgentWidget(
+      { listAgents: () => [runningAgent] } as any,
+      new Map(),
+      () => "all",
+      () => false,
+      () => false,
+      () => "claude",
+    );
+    let statusText: string | undefined;
+    widget.setUICtx({
+      theme,
+      setStatus: (_k, text) => { statusText = text; },
+      setWidget: () => {},
+    });
+    widget.update();
+    expect(statusText).toBe("1 running agent");
+  });
+
+  it("formats status bar as plain text when no theme is present on UICtx", () => {
+    const runningAgent = {
+      id: "agent-1",
+      type: "general-purpose",
+      description: "running worker",
+      status: "running" as const,
+      toolUses: 0,
+      startedAt: Date.now(),
+    };
+    const widget = new AgentWidget(
+      { listAgents: () => [runningAgent] } as any,
+      new Map(),
+      () => "all",
+      () => false,
+      () => false,
+      () => "pi",
+    );
+    let statusText: string | undefined;
+    widget.setUICtx({
+      setStatus: (_k, text) => { statusText = text; },
+      setWidget: () => {},
+    });
+    widget.update();
+    expect(statusText).toBe("1 running agent");
+  });
+
+  it("clears status bar when all agents finish and clear", () => {
+    const agent = {
+      id: "agent-1",
+      type: "general-purpose",
+      description: "worker",
+      status: "running" as const,
+      toolUses: 0,
+      startedAt: Date.now(),
+    };
+    const widget = new AgentWidget(
+      { listAgents: () => [agent] } as any,
+      new Map(),
+      () => "all",
+      () => false,
+      () => false,
+      () => "pi",
+    );
+    let statusText: string | undefined;
+    widget.setUICtx({
+      theme,
+      setStatus: (_k, text) => { statusText = text; },
+      setWidget: () => {},
+    });
+    widget.update();
+    expect(statusText).toBeDefined();
+
+    agent.status = "completed" as any;
+    widget.markFinished(agent.id);
+    widget.onTurnStart();
+    widget.onTurnStart();
+    widget.update();
+    expect(statusText).toBeUndefined();
+  });
+});

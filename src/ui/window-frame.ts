@@ -31,6 +31,7 @@
  */
 
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { UIStyle } from "../types.js";
 import { clampLine, type WorkflowCardLine, type WorkflowCardSegment } from "./workflow-card.js";
 
 /** The bars that separate the cells of a two-pane row: `│ a │ b │`. */
@@ -71,6 +72,20 @@ export const UNICODE_PANE_BOX: PaneBox = {
   bottomTee: "┴",
   leftTee: "├",
   rightTee: "┤",
+};
+
+/** Native Pi style: edge-to-edge horizontal rules, clean tees, horizontal ends. */
+export const PI_PANE_BOX: PaneBox = {
+  topLeft: "─",
+  topRight: "─",
+  bottomLeft: "─",
+  bottomRight: "─",
+  horizontal: "─",
+  vertical: "│",
+  topTee: "┬",
+  bottomTee: "┴",
+  leftTee: "─",
+  rightTee: "─",
 };
 
 /** The ASCII tier, one column per glyph so the bars stay aligned either way. */
@@ -428,7 +443,8 @@ function paneCell(line: WorkflowCardLine | undefined, cellWidth: number, pad: nu
   const inner = Math.max(0, cellWidth - 2 * pad);
   const clamped = clampLine(line ?? [], inner, ellipsis);
   const gap = Math.max(0, inner - lineWidth(clamped));
-  return [{ text: " ".repeat(pad) }, ...clamped, { text: " ".repeat(gap + pad) }];
+  const bg = clamped.find(seg => seg.bg)?.bg;
+  return [{ text: " ".repeat(pad), bg }, ...clamped, { text: " ".repeat(gap + pad), bg }];
 }
 
 /**
@@ -491,10 +507,14 @@ export function renderWindow(options: {
  * drawn into the top edge itself. */
   title?: string;
   ellipsis?: string;
+  style?: UIStyle;
 }): WorkflowCardLine[] {
   const { width, box, panes } = options;
+  const isPi = (options.style === "pi" || options.style === undefined) && (box === PI_PANE_BOX || box.topLeft === "─");
   const ellipsis = options.ellipsis ?? "…";
   const edge = (text: string): WorkflowCardSegment => ({ text, color: "border" });
+  const outerLeft: WorkflowCardSegment[] = isPi ? [{ text: " " }] : [edge(box.vertical)];
+  const outerRight: WorkflowCardSegment[] = isPi ? [{ text: " " }] : [edge(box.vertical)];
   const bar = [edge(box.vertical)];
   const rightCell = panes ? width - panes.leftCellWidth - FRAME_BARS : width - 2;
   const lines: WorkflowCardLine[] = [];
@@ -510,30 +530,31 @@ export function renderWindow(options: {
         const inner = windowInnerWidth(width);
         const clamped = clampLine(item.cells, inner, ellipsis);
         const gap = Math.max(0, inner - lineWidth(clamped));
-        lines.push([...bar, { text: " " }, ...clamped, { text: " ".repeat(gap + 1) }, ...bar]);
+        const bg = clamped.find(seg => seg.bg)?.bg;
+        lines.push([...outerLeft, { text: " ", bg }, ...clamped, { text: " ".repeat(gap + 1), bg }, ...outerRight]);
         break;
       }
       case "split":
         lines.push(panes
           ? [
-              ...bar,
+              ...outerLeft,
               ...paneCell(item.left, panes.leftCellWidth, panes.pad, ellipsis),
               ...bar,
               ...paneCell(item.right, rightCell, panes.pad, ellipsis),
-              ...bar,
+              ...outerRight,
             ]
-          : [...bar, ...paneCell(item.left ?? item.right, width - 2, 0, ellipsis), ...bar]);
+          : [...outerLeft, ...paneCell(item.left ?? item.right, width - 2, 0, ellipsis), ...outerRight]);
         break;
       case "headerRule":
         lines.push(panes
           ? [
-              ...bar,
+              ...outerLeft,
               ...paneCell(item.left, panes.leftCellWidth, panes.pad, ellipsis),
               ...bar,
               ...headerRuleCell(rightCell, panes.pad, box),
-              ...bar,
+              ...outerRight,
             ]
-          : [...bar, ...headerRuleCell(width - 2, PANE_PADDING, box), ...bar]);
+          : [...outerLeft, ...headerRuleCell(width - 2, PANE_PADDING, box), ...outerRight]);
         break;
       case "titles": {
         // One rule, whether there are one or two cells to title: the pane `│`
@@ -548,19 +569,23 @@ export function renderWindow(options: {
           titlePadding: item.padding ?? "outside",
         });
         const tee = edge(item.left !== undefined || item.right !== undefined ? box.topTee : box.vertical);
+        const leftTee = edge(isPi ? box.horizontal : rule.leftTee);
+        const rightTee = edge(isPi ? box.horizontal : rule.rightTee);
         lines.push(panes
-          ? [edge(rule.leftTee), ...ruleCell(rule.left), tee, ...ruleCell(rule.right), edge(rule.rightTee)]
-          : [edge(rule.leftTee), ...ruleCell(rule.left), edge(rule.rightTee)]);
+          ? [leftTee, ...ruleCell(rule.left), tee, ...ruleCell(rule.right), rightTee]
+          : [leftTee, ...ruleCell(rule.left), rightTee]);
         break;
       }
       case "band":
-        lines.push([
-          ...bar,
-          { text: " " },
-          ...bandRuleLine(windowInnerWidth(width), box, panes ? panes.leftCellWidth - 1 : undefined),
-          { text: " " },
-          ...bar,
-        ]);
+        lines.push(isPi && panes
+          ? bandRuleLine(width, box, panes.leftCellWidth + 1)
+          : [
+              ...outerLeft,
+              { text: " " },
+              ...bandRuleLine(windowInnerWidth(width), box, panes ? panes.leftCellWidth - 1 : undefined),
+              { text: " " },
+              ...outerRight,
+            ]);
         break;
     }
   }

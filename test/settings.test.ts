@@ -169,6 +169,15 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
   });
 
+  it("round-trips uiStyle; keeps valid values, drops invalid", () => {
+    saveSettings({ uiStyle: "claude" }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ uiStyle: "claude" });
+    saveSettings({ uiStyle: "pi" }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ uiStyle: "pi" });
+    writeProject({ uiStyle: "vintage" } as any);
+    expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
+  });
+
   it("round-trips outputTranscript; drops non-boolean", () => {
     saveSettings({ outputTranscript: false }, projectDir);
     expect(loadSettings(projectDir)).toEqual({ outputTranscript: false });
@@ -611,6 +620,7 @@ describe("settings persistence", () => {
         setShowModel: vi.fn(),
         setPackageAgents: vi.fn(),
         setPackageWorkflows: vi.fn(),
+        setUIStyle: vi.fn(),
       };
     });
 
@@ -741,6 +751,13 @@ describe("settings persistence", () => {
       expect(appliers.setViewerMarkdown).toHaveBeenCalledWith("all");
       applySettings({}, appliers);
       expect(appliers.setViewerMarkdown).toHaveBeenCalledTimes(1); // absence is "use default"
+    });
+
+    it("applies uiStyle; skips it when absent", () => {
+      applySettings({ uiStyle: "claude" }, appliers);
+      expect(appliers.setUIStyle).toHaveBeenCalledWith("claude");
+      applySettings({}, appliers);
+      expect(appliers.setUIStyle).toHaveBeenCalledTimes(1); // absence is "use default"
     });
 
     it("applies fleetView (true and false); skips it when absent", () => {

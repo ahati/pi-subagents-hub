@@ -9,6 +9,9 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Added
+- **Pi-native UI style for overlay windows and status bar.** Window frames in the agent hub and conversation viewer render with edge-to-edge rules without outer side rails (`│`) or rounded box corners (`╭`, `╮`, `╰`, `╯`) to align with Pi's native chrome conventions, fullscreen overlays pin flush to terminal edges without top/bottom row gaps, active roster selections use Pi's native `selectedBg` token across pane cells, and the status bar displays themed accent spinners and dim labels in Pi's footer. Configurable via `uiStyle: "pi" | "claude"` in `subagents.json` or `/agents → Settings → UI style` (defaults to `"pi"`), with `"claude"` style preserving Claude Code-compatible rounded boxes and plain text status.
+
 ## [2026.10.16-r1] - 2026-10-16
 
 ### Added

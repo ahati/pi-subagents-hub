@@ -44,7 +44,7 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
 
 // Must import AFTER vi.mock declaration (vitest hoists vi.mock but the
 // dynamic import of the test subject must happen after)
-const { visibleWidth } = await import("@earendil-works/pi-tui");
+const { stripTerminalSequences, visibleWidth } = await import("@earendil-works/pi-tui");
 const { ConversationViewer, RESULT_MAX_CHARS } = await import("../src/ui/conversation-viewer.js");
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -117,7 +117,7 @@ describe("ConversationViewer invocation line", () => {
     // The row arrives inside the overlay's frame, padded out to the right
     // border; what is under test is the metadata it carries.
     const row = viewer.render(200).find(l => l.includes("↳"));
-    return row ? row.slice(row.indexOf("↳")).replace(/\s*│\s*$/, "") : "";
+    return row ? row.slice(row.indexOf("↳")).replace(/\s*│?\s*$/, "") : "";
   }
 
   // The canonical id, not the short label the widget uses: this overlay is
@@ -1167,3 +1167,58 @@ describe("ConversationViewer embedded chrome (host-composed identity and band)",
     expect(lines[tail - 1].trim()).not.toBe("");
   });
 });
+
+describe("ConversationViewer windowed borders (Pi style vs Claude style)", () => {
+  it("renders edge-to-edge rules and no side rails in Pi native style", () => {
+    const viewer = new ConversationViewer(
+      mockTui(24, 60), mockSession([{ role: "user", content: "hello" }]), mockRecord(), undefined, ansiTheme(), vi.fn(),
+      undefined, undefined, undefined, false, undefined, undefined, "auto", undefined,
+      { uiStyle: "pi" },
+    );
+    const lines = viewer.render(60);
+    // Top border is edge-to-edge ─ with no corners
+    expect(stripTerminalSequences(lines[0])).toBe("─".repeat(60));
+    expect(lines[0]).not.toContain("╭");
+    expect(lines[0]).not.toContain("╮");
+
+    // Content lines have no │ side rails
+    const contentLines = lines.slice(1, -1);
+    for (const l of contentLines) {
+      const stripped = stripTerminalSequences(l);
+      expect(stripped).not.toMatch(/^│/);
+      expect(stripped).not.toMatch(/│$/);
+      expect(visibleWidth(l)).toBe(60);
+    }
+
+    // Bottom border is edge-to-edge ─ with no corners
+    const last = lines[lines.length - 1];
+    expect(stripTerminalSequences(last)).toBe("─".repeat(60));
+    expect(last).not.toContain("╰");
+    expect(last).not.toContain("╯");
+  });
+
+  it("renders rounded box corners and side rails in Claude Code style", () => {
+    const viewer = new ConversationViewer(
+      mockTui(24, 60), mockSession([{ role: "user", content: "hello" }]), mockRecord(), undefined, ansiTheme(), vi.fn(),
+      undefined, undefined, undefined, false, undefined, undefined, "auto", undefined,
+      { uiStyle: "claude" },
+    );
+    const lines = viewer.render(60);
+    // Top border is rounded ╭──╮
+    expect(stripTerminalSequences(lines[0])).toBe(`╭${"─".repeat(58)}╮`);
+
+    // Content lines have │ rails on both sides
+    const contentLines = lines.slice(1, -1);
+    for (const l of contentLines) {
+      const stripped = stripTerminalSequences(l);
+      expect(stripped.startsWith("│")).toBe(true);
+      expect(stripped.endsWith("│")).toBe(true);
+      expect(visibleWidth(l)).toBe(60);
+    }
+
+    // Bottom border is rounded ╰──╯
+    const last = lines[lines.length - 1];
+    expect(stripTerminalSequences(last)).toBe(`╰${"─".repeat(58)}╯`);
+  });
+});
+

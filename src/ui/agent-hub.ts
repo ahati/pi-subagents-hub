@@ -23,7 +23,7 @@ import { type Component, Input, matchesKey, type ScrollViewScrollbar, type TUI, 
 import { renderAgentRecordName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
 import { extractText } from "../context.js";
-import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
+import type { AgentRecord, UIStyle, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../usage.js";
 import {
   buildPhaseGroups,
@@ -50,6 +50,8 @@ import {
   type FooterHint,
   footerBand,
   masterPaneGeometry,
+  type PaneBox,
+  PI_PANE_BOX,
   paneBodyHeight,
   renderWindow,
   TWO_PANE_MIN_WIDTH,
@@ -319,6 +321,8 @@ export interface AgentHubDeps {
    * which runs have a tool call waiting to be released. Omitted → no `b`.
    */
   backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction;
+  /** Visual style for window frame rendering (Pi native vs Claude Code). */
+  uiStyle?: () => UIStyle;
 }
 
 // ---- Roster (module-level so the reopen loop can peek without an instance) ----
@@ -466,7 +470,14 @@ const POPUP_HEIGHT_PCT = 70;
 const HUB_FALLBACK_ROWS = 24;
 const POPUP_OVERLAY_OPTIONS = { anchor: "center", width: `${POPUP_WIDTH_PCT}%`, maxHeight: `${POPUP_HEIGHT_PCT}%` };
 /** Overlay geometry for the full-screen hub. */
-const FULLSCREEN_OVERLAY_OPTIONS = { anchor: "center", width: "100%", maxHeight: "100%" };
+const FULLSCREEN_OVERLAY_OPTIONS = {
+  anchor: "top-left",
+  width: "100%",
+  maxHeight: "100%",
+  row: 0,
+  col: 0,
+  margin: 0,
+};
 
 /** What `openAgentHub` resolves its per-mode `ui.custom` promise with. */
 type HubResult = "toggle" | undefined;
@@ -693,6 +704,15 @@ export class AgentHub implements Component {
   }
 
   invalidate(): void { /* no cached render state */ }
+
+  private effectiveStyle(): UIStyle {
+    return this.deps.uiStyle?.() ?? "pi";
+  }
+
+  private effectiveBox(): PaneBox {
+    if (this.popup) return UNICODE_PANE_BOX;
+    return this.effectiveStyle() === "pi" ? PI_PANE_BOX : UNICODE_PANE_BOX;
+  }
 
   /**
    * Mouse wheel support, fullscreen route. pi's alt-screen renderer parses
@@ -1323,7 +1343,8 @@ export class AgentHub implements Component {
     return paintWindow(
       renderWindow({
         width,
-        box: UNICODE_PANE_BOX,
+        box: this.effectiveBox(),
+        style: this.popup ? "claude" : this.effectiveStyle(),
         panes: twoPane ? masterPaneGeometry(width) : undefined,
         title: HUB_TITLE,
         rows,
@@ -1437,7 +1458,8 @@ export class AgentHub implements Component {
     return paintWindow(
       renderWindow({
         width,
-        box: UNICODE_PANE_BOX,
+        box: this.effectiveBox(),
+        style: this.popup ? "claude" : this.effectiveStyle(),
         rows: [
           { kind: "full", cells: [{ text: this.activityTitle(width) }] },
           { kind: "full", cells: [{ text: "─".repeat(width), color: "dim" }] },
@@ -1492,7 +1514,11 @@ export class AgentHub implements Component {
         lines.push([{ text: item.label, color: "dim", bold: true }]);
         continue;
       }
-      lines.push(clampLine([{ text: this.renderEntry(item, item === selectedEntry, width) }], width));
+      const isSelected = item === selectedEntry;
+      lines.push(clampLine([{
+        text: this.renderEntry(item, isSelected, width),
+        ...(isSelected ? { bg: "selectedBg" as const } : {}),
+      }], width));
     }
     return lines;
   }
@@ -1746,20 +1772,24 @@ export class AgentHub implements Component {
       const capacity = Math.max(1, phaseFirst ? rows - lines.length : rows - phaseBlock - lines.length);
       const slice = windowRange(selection, entries.length, capacity);
       for (let i = slice.start; i < slice.end; i++) {
-        lines.push(
-          ...agentRow({
-            entry: entries[i],
-            selected: i === selection,
-            compact: this.page !== "L",
-            width,
-            glyphs,
-            runStatus: source.task.status,
-            spinnerFrame: 0,
-            now: Date.now(),
-            // No live tail here: the 18-column master clamps it to noise —
-            // the run page's wide pane carries the live facts.
-          }),
-        );
+        const isSelected = i === selection;
+        const rows = agentRow({
+          entry: entries[i],
+          selected: isSelected,
+          compact: this.page !== "L",
+          width,
+          glyphs,
+          runStatus: source.task.status,
+          spinnerFrame: 0,
+          now: Date.now(),
+          // No live tail here: the 18-column master clamps it to noise —
+          // the run page's wide pane carries the live facts.
+        });
+        if (isSelected) {
+          lines.push(...rows.map(r => r.map(seg => ({ ...seg, bg: "selectedBg" as const }))));
+        } else {
+          lines.push(...rows);
+        }
       }
     }
     if (!phaseFirst && groups.length > 0) {
@@ -1943,6 +1973,7 @@ export class AgentHub implements Component {
         scrollHint: () => "PgUp/PgDn · Shift+↑↓ · j/k scroll",
         frameless: () => true,
         onUnhandledKey: data => this.pageUnhandledKey(data),
+        uiStyle: () => this.effectiveStyle(),
       },
     );
     return this.viewer;
@@ -2404,8 +2435,10 @@ function paintWindow(lines: readonly WorkflowCardLine[], th: Theme): string[] {
   return lines.map(line =>
     line
       .map(segment => {
-        const text = segment.bold ? th.bold(segment.text) : segment.text;
-        return segment.color ? th.fg(segment.color, text) : text;
+        let text = segment.bold ? th.bold(segment.text) : segment.text;
+        if (segment.color) text = th.fg(segment.color, text);
+        if (segment.bg && typeof (th as any).bg === "function") text = (th as any).bg(segment.bg, text);
+        return text;
       })
       .join(""),
   );

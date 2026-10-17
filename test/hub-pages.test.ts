@@ -92,6 +92,7 @@ function harness(
     } as unknown as AgentManager,
     agentActivity: new Map<string, AgentActivity>(),
     showCost: false,
+    uiStyle: () => "claude",
     ...depsOver,
   };
   return {
@@ -1372,5 +1373,17 @@ describe("P10 — runId opens the run's page and the run controls live there", (
     h.press("s");
     h.press("r");
     expect(h.frame().at(-1)).toContain("╯");
+  });
+
+  it("renders Pi native chrome when uiStyle is pi", () => {
+    const h = harness([makeRecord({ id: "a1" })], { uiStyle: () => "pi" });
+    h.open();
+    const frame = h.frame(120);
+    expect(frame[0].startsWith("─")).toBe(true);
+    expect(frame[0]).not.toContain("╭");
+    expect(frame[0]).not.toContain("╮");
+    expect(frame.at(-1)).toBe("─".repeat(120));
+    expect(frame.at(-1)).not.toContain("╰");
+    expect(frame.at(-1)).not.toContain("╯");
   });
 });

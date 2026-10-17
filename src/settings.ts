@@ -6,7 +6,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
-import type { AgentMentionMode, JoinMode, ViewerMarkdownMode, WidgetMode } from "./types.js";
+import type { AgentMentionMode, JoinMode, UIStyle, ViewerMarkdownMode, WidgetMode } from "./types.js";
+
+export type { UIStyle };
 
 export interface SubagentsSettings {
   maxConcurrent?: number;
@@ -337,6 +339,13 @@ export interface SubagentsSettings {
    * `ViewerMarkdownMode` for the specific rewrites — so `all` is opt-in.
    */
   viewerMarkdown?: ViewerMarkdownMode;
+  /**
+   * UI appearance style:
+   * - `pi`: native Pi styling (edge-to-edge horizontal borders, no outer vertical side rails, themed footer).
+   * - `claude`: Claude Code box styling (rounded corners `╭───╮`, outer `│` rails).
+   * Defaults to `pi`.
+   */
+  uiStyle?: UIStyle;
 }
 
 export type ToolDescriptionMode = "full" | "compact" | "custom";
@@ -367,6 +376,7 @@ export interface SettingsAppliers {
   setShowCost: (b: boolean) => void;
   setShowModel: (b: boolean) => void;
   setViewerMarkdown: (mode: ViewerMarkdownMode) => void;
+  setUIStyle: (style: UIStyle) => void;
   setPackageAgents: (gate: boolean | string[]) => void;
   setPackageWorkflows: (gate: boolean | string[]) => void;
 }
@@ -379,6 +389,7 @@ const VALID_TOOL_DESCRIPTION_MODES: ReadonlySet<string> = new Set<ToolDescriptio
 const VALID_WIDGET_MODES: ReadonlySet<string> = new Set<WidgetMode>(["all", "background", "off"]);
 const VALID_VIEWER_MARKDOWN_MODES: ReadonlySet<string> = new Set<ViewerMarkdownMode>(["off", "assistant", "all"]);
 const VALID_AGENT_MENTION_MODES: ReadonlySet<string> = new Set<AgentMentionMode>(["model", "direct", "off"]);
+const VALID_UI_STYLES: ReadonlySet<string> = new Set<UIStyle>(["pi", "claude"]);
 
 // Sanity ceilings — prevent hand-edited configs from asking for values that
 // make no operational sense (e.g. 1e6 concurrent subagents). Permissive enough
@@ -504,6 +515,9 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (typeof r.viewerMarkdown === "string" && VALID_VIEWER_MARKDOWN_MODES.has(r.viewerMarkdown)) {
     out.viewerMarkdown = r.viewerMarkdown as ViewerMarkdownMode;
   }
+  if (typeof r.uiStyle === "string" && VALID_UI_STYLES.has(r.uiStyle)) {
+    out.uiStyle = r.uiStyle as UIStyle;
+  }
   if (typeof r.workflowsEnabled === "boolean") {
     out.workflowsEnabled = r.workflowsEnabled;
   }
@@ -596,6 +610,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.showCost === "boolean") appliers.setShowCost(s.showCost);
   if (typeof s.showModel === "boolean") appliers.setShowModel(s.showModel);
   if (s.viewerMarkdown) appliers.setViewerMarkdown(s.viewerMarkdown);
+  if (s.uiStyle) appliers.setUIStyle(s.uiStyle);
   if (typeof s.workflowsEnabled === "boolean") appliers.setWorkflowsEnabled(s.workflowsEnabled);
   if (s.packageAgents !== undefined) appliers.setPackageAgents(s.packageAgents);
   if (s.packageWorkflows !== undefined) appliers.setPackageWorkflows(s.packageWorkflows);
