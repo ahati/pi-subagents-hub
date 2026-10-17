@@ -107,13 +107,9 @@ describe("describeActivity tool phrases", () => {
     expect(describeActivity(active)).toBe("editing src/auth.ts…");
   });
 
-  it("shows the command's first words for bash", () => {
-    const active = calls([["c1", { toolName: "bash", args: { command: "npm run check --silent" } }]]);
-    expect(describeActivity(active)).toBe("running npm run check…");
-  });
-
-  it("falls back to the generic verb when bash has no command", () => {
-    expect(describeActivity(calls([["c1", { toolName: "bash" }]]))).toBe("running command…");
+  it("keeps bash generic — command fragments read as noise", () => {
+    const active = calls([["c1", { toolName: "bash", args: { command: "cd /home/app && npm run check --silent" } }]]);
+    expect(describeActivity(active)).toBe("running command…");
   });
 
   it("quotes search patterns", () => {

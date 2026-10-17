@@ -41,7 +41,7 @@ import {
   type HubEntry,
   type HubPage,
   type HubRosterItem,
-  lastNonEmptyLine,
+  lastContentfulLine,
   lifecycleRank,
   type PaneRow,
   padLines,
@@ -106,24 +106,24 @@ export function runAgentLive(
 export function runAgentTail(record: AgentRecord | undefined, activity: AgentActivity | undefined): string {
   const tools = activity?.activeTools ?? new Map<string, ActiveToolCall>();
   if (tools.size > 0) return describeActivity(tools, activity?.responseText);
-  const streamed = lastNonEmptyLine(activity?.responseText ?? "");
+  const streamed = lastContentfulLine(activity?.responseText ?? "");
   if (streamed) return streamed;
   // Between turns (or untracked) — walk the transcript newest-first. An
-  // assistant message contributes its last line; a tool result its first
-  // contentful line (the head names what it did — the tail is whatever the
-  // output ended on: `}` of pretty-printed JSON, a truncation marker, a frame).
+  // assistant message contributes its last contentful line; a tool result its
+  // first (the head names what it did — the tail is whatever the output ended
+  // on: `}` of pretty-printed JSON, a truncation marker, a frame).
   const messages = record?.session?.messages ?? [];
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== "assistant" && message.role !== "toolResult") continue;
     const text = extractText(message.content as unknown[]);
     if (message.role === "assistant") {
-      const line = lastNonEmptyLine(text);
+      const line = lastContentfulLine(text);
       if (line) return line;
     } else {
       for (const line of text.split("\n")) {
         const trimmed = line.trim();
-        if (trimmed && /\w/.test(trimmed)) return trimmed;
+        if (trimmed && /\w/.test(trimmed) && !trimmed.startsWith("```")) return trimmed;
       }
     }
   }

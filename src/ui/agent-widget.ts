@@ -255,7 +255,7 @@ function truncateLine(text: string, len = 60): string {
   return line.slice(0, len) + "…";
 }
 
-/** The part of a tool call's args worth naming in the subtext: the file, the pattern, or the command's first words. */
+/** The part of a tool call's args worth naming in the subtext: the file or the pattern. */
 function argHint(toolName: string, args: unknown): string | undefined {
   if (typeof args !== "object" || args === null) return undefined;
   const a = args as Record<string, unknown>;
@@ -267,9 +267,6 @@ function argHint(toolName: string, args: unknown): string | undefined {
     case "write":
     case "ls":
       return str(a.path);
-    case "bash":
-      // First words only: `npm run check`, not the whole multi-line script.
-      return str(a.command)?.split(/\s+/).slice(0, 3).join(" ");
     case "grep":
     case "find": {
       const pattern = str(a.pattern);
@@ -280,11 +277,10 @@ function argHint(toolName: string, args: unknown): string | undefined {
   }
 }
 
-/** One active call as a verb phrase: `editing src/foo.ts`, `running npm test`. */
+/** One active call as a verb phrase: `editing src/foo.ts`, `running command`. */
 function describeToolCall(call: ActiveToolCall): string {
   const action = TOOL_DISPLAY[call.toolName] ?? call.toolName;
   const hint = argHint(call.toolName, call.args);
-  if (call.toolName === "bash") return hint ? `running ${hint}` : action;
   return hint ? `${action} ${hint}` : action;
 }
 

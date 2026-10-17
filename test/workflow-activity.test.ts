@@ -138,6 +138,11 @@ describe("runAgentTail extraction", () => {
     expect(runAgentTail(record as any, undefined)).toBe("Reading the config now.");
   });
 
+  it("a structured child's JSON payload is not a tail — lands on the last contentful line", () => {
+    const record = { session: { messages: [msg("assistant", "Here is the result:\n{\n  \"summary\": \"all green\"\n}")] } };
+    expect(runAgentTail(record as any, undefined)).toBe("\"summary\": \"all green\"");
+  });
+
   it("extracts a contentful line from tool output, skipping JSON braces", () => {
     const record = { session: { messages: [msg("assistant", "Checking the config."), msg("toolResult", "{\n  \"key\": \"value\"\n}")] } };
     expect(runAgentTail(record as any, undefined)).toBe("\"key\": \"value\"");
@@ -171,5 +176,29 @@ describe("runAgentTail extraction", () => {
       .map((r: any) => (Array.isArray(r) ? r.map((s: any) => s.text).join("") : ""));
     expect(rows.join("\n")).toContain("note   Latest line after more work.");
     expect(rows.join("\n")).not.toContain("note   Opening line.");
+  });
+
+  it("the agent log's note line skips a trailing JSON brace", () => {
+    const record = {
+      id: "a2", alias: "beta", handle: "beta", type: "general-purpose", description: "task",
+      startedAt: 1_000, toolUses: 0, status: "completed", completedAt: 2_000,
+    };
+    const activity: AgentActivity = {
+      activeTools: new Map(), toolUses: 0,
+      responseText: "{\n  \"summary\": \"all green\"\n}",
+      turnCount: 1,
+    };
+    const host = {
+      theme: { fg: (_c: string, s: string) => s },
+      focusedRecord: () => record,
+      deps: { agentActivity: new Map([["a2", activity]]), showCost: false },
+      logScroll: 0,
+      setLogScroll: () => {},
+      setLogReadout: () => {},
+    };
+    const rows = buildAgentLogLines(80, 20, host as any)
+      .map((r: any) => (Array.isArray(r) ? r.map((s: any) => s.text).join("") : ""));
+    expect(rows.join("\n")).toContain("note   \"summary\": \"all green\"");
+    expect(rows.join("\n")).not.toContain("note   }");
   });
 });

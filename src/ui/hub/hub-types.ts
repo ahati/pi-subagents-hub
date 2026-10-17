@@ -223,6 +223,20 @@ export function lastNonEmptyLine(text: string): string {
   return "";
 }
 
+/**
+ * The last line that actually says something: structured children end their
+ * output with a JSON payload, so the literal last line is `}` — or a ``` fence.
+ * Skips lines without word characters and fence markers.
+ */
+export function lastContentfulLine(text: string): string {
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (line && /\w/.test(line) && !line.startsWith("```")) return line;
+  }
+  return "";
+}
+
 /** Turns taken from the session: one assistant message ≈ one model turn. */
 export function assistantTurnCount(messages: readonly { role?: string }[] | undefined): number | undefined {
   if (messages === undefined) return undefined;
