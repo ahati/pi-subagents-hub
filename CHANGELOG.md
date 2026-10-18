@@ -9,6 +9,8 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+## [2026.10.18-r2] - 2026-10-18
+
 ### Added
 - **Draggable pane divider in Agent Hub.** The split divider between the roster list and detail pane can now be dragged horizontally with the mouse to resize the panels. The center portion of the divider displays shaded glyph handles (`▒` idle, `▓` while actively dragging in accent color) to make it visibly apparent that it is draggable. Dragging clamps the roster list width between a minimum of 18 columns and a maximum of 50% of the hub width, and persists the custom width across navigation and view reloads.
 
