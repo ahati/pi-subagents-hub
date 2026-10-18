@@ -98,9 +98,29 @@ export function observeRun(session: AgentSession, options: RunObserverOptions): 
     if (event.type === "message_start") {
       currentMessageText = "";
     }
-    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      currentMessageText += event.assistantMessageEvent.delta;
-      options.onTextDelta?.(event.assistantMessageEvent.delta, currentMessageText);
+    if (event.type === "message_update") {
+      const ame = event.assistantMessageEvent;
+      if (ame.type === "text_delta") {
+        currentMessageText += ame.delta;
+        options.onTextDelta?.(ame.delta, currentMessageText);
+      } else if (ame.type === "toolcall_start") {
+        const item = ame.partial.content[ame.contentIndex];
+        if (item && item.type === "toolCall") {
+          options.onToolActivity?.({
+            type: "start",
+            toolName: item.name,
+            toolCallId: item.id,
+            args: item.arguments,
+          });
+        }
+      } else if (ame.type === "toolcall_end") {
+        options.onToolActivity?.({
+          type: "start",
+          toolName: ame.toolCall.name,
+          toolCallId: ame.toolCall.id,
+          args: ame.toolCall.arguments,
+        });
+      }
     }
     if (event.type === "tool_execution_start") {
       options.onToolActivity?.({ type: "start", toolName: event.toolName, toolCallId: event.toolCallId, args: event.args });

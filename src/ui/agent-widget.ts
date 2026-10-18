@@ -65,6 +65,8 @@ export interface AgentActivity {
   activeTools: Map<string, ActiveToolCall>;
   /** The most recently completed call — shown between messages for quiet agents. */
   lastTool?: ActiveToolCall;
+  /** Whether the most recent event was text streaming or tool completion. */
+  lastActivity?: "text" | "tool";
   toolUses: number;
   responseText: string;
   session?: SessionLike;
@@ -304,8 +306,13 @@ export function describeCompletedToolCall(call: ActiveToolCall): string {
   return hint ? `${action} ${hint}` : action;
 }
 
-/** Activity subtext: tool calls as verb phrases (`editing src/foo.ts`), else the last streamed output line. */
-export function describeActivity(activeTools: Map<string, ActiveToolCall>, responseText?: string): string {
+/** Activity subtext: tool calls as verb phrases (`editing src/foo.ts`), else the last completed call, else the last streamed output line. */
+export function describeActivity(
+  activeTools: Map<string, ActiveToolCall>,
+  responseText?: string,
+  lastTool?: ActiveToolCall,
+  preferLastTool = false,
+): string {
   if (activeTools.size > 0) {
     const phrases: string[] = [];
     for (const call of activeTools.values()) {
@@ -318,9 +325,19 @@ export function describeActivity(activeTools: Map<string, ActiveToolCall>, respo
     return text.length <= 60 ? `${text}…` : `${text.slice(0, 59)}…`;
   }
 
-  // No tools active — show truncated response text if available
+  // When a completed tool call is more recent than narration, show what was just done
+  if (preferLastTool && lastTool) {
+    return describeCompletedToolCall(lastTool);
+  }
+
+  // Show truncated response text if available
   if (responseText && responseText.trim().length > 0) {
     return truncateLine(responseText);
+  }
+
+  // Fall back to completed tool call if no response text
+  if (lastTool) {
+    return describeCompletedToolCall(lastTool);
   }
 
   return "thinking…";
@@ -562,7 +579,9 @@ export class AgentWidget {
       parts.push(elapsed);
       const statsText = parts.join(" · ");
 
-      const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
+      const activity = bg
+        ? describeActivity(bg.activeTools, bg.responseText, bg.lastTool, bg.lastActivity === "tool")
+        : "thinking…";
 
       runningLines.push([
         truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentRecordName(a, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),

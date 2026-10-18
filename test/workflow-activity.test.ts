@@ -145,6 +145,30 @@ describe("runAgentTail extraction", () => {
     expect(runAgentTail(record as any, activity)).toBe("searched 'max turns'");
   });
 
+  it("shows the completed tool call when a tool finished after earlier narration", () => {
+    const activity: AgentActivity = {
+      activeTools: new Map(),
+      lastTool: { toolName: "read", args: { path: "src/config.ts" } },
+      lastActivity: "tool",
+      toolUses: 1,
+      responseText: "I'll start by reading the config.",
+      turnCount: 1,
+    };
+    expect(runAgentTail(undefined, activity)).toBe("read src/config.ts");
+  });
+
+  it("shows the newer narration when agent spoke after completing a tool", () => {
+    const activity: AgentActivity = {
+      activeTools: new Map(),
+      lastTool: { toolName: "read", args: { path: "src/config.ts" } },
+      lastActivity: "text",
+      toolUses: 1,
+      responseText: "Config is valid. Proceeding.",
+      turnCount: 2,
+    };
+    expect(runAgentTail(undefined, activity)).toBe("Config is valid. Proceeding.");
+  });
+
   it("shows the newest assistant line when the agent spoke last", () => {
     const record = { session: { messages: [msg("toolResult", "{\n  \"key\": \"value\"\n}"), msg("assistant", "Reading the config now.")] } };
     expect(runAgentTail(record as any, undefined)).toBe("Reading the config now.");

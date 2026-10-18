@@ -110,6 +110,9 @@ export function runAgentTail(record: AgentRecord | undefined, activity: AgentAct
   // assistant narration. thinking… means literally nothing has happened yet.
   const tools = activity?.activeTools ?? new Map<string, ActiveToolCall>();
   if (tools.size > 0) return describeActivity(tools, activity?.responseText);
+  if (activity?.lastActivity === "tool" && activity.lastTool) {
+    return describeCompletedToolCall(activity.lastTool);
+  }
   const streamed = lastContentfulLine(activity?.responseText ?? "");
   if (streamed) return streamed;
   if (activity?.lastTool) return describeCompletedToolCall(activity.lastTool);
@@ -376,7 +379,7 @@ export function buildActivityLines(
     const record = entry.record;
     const act = agentActivity.get(record.id);
     const doing = act
-      ? describeActivity(act.activeTools, act.responseText)
+      ? describeActivity(act.activeTools, act.responseText, act.lastTool, act.lastActivity === "tool")
       : record.status === "running" ? "thinking…" : record.status;
     const turns = act?.maxTurns ? ` · turn ${act.turnCount}/${act.maxTurns}` : act ? ` · turn ${act.turnCount}` : "";
     const parentPrefix = entry.depth === 1 ? th.fg("dim", "↳ ") : "";

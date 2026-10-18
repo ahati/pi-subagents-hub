@@ -184,6 +184,24 @@ describe("createActivityTracker", () => {
     expect(state.lastTool).toEqual({ toolName: "grep", args: { pattern: "maxTurns" } });
     expect(state.activeTools.size).toBe(0);
   });
+
+  it("shows completed tool call instead of reverting to earlier narration", () => {
+    const { state, callbacks } = createActivityTracker();
+    // Turn 1 starts with narration:
+    callbacks.onTextDelta("I will investigate the codebase.", "I will investigate the codebase.");
+    expect(describeActivity(state.activeTools, state.responseText, state.lastTool, (state as any).lastActivity === "tool"))
+      .toBe("I will investigate the codebase.");
+
+    // Turn 1 tool runs:
+    callbacks.onToolActivity({ type: "start", toolName: "read", toolCallId: "t1", args: { path: "src/index.ts" } });
+    expect(describeActivity(state.activeTools, state.responseText, state.lastTool, (state as any).lastActivity === "tool"))
+      .toBe("reading src/index.ts…");
+
+    // Turn 1 tool completes:
+    callbacks.onToolActivity({ type: "end", toolName: "read", toolCallId: "t1" });
+    expect(describeActivity(state.activeTools, state.responseText, state.lastTool, (state as any).lastActivity === "tool"))
+      .toBe("read src/index.ts");
+  });
 });
 
 describe("AgentWidget", () => {

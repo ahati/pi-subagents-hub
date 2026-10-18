@@ -90,7 +90,14 @@ export function buildAgentLogLines(width: number, rows: number, host: HubLogHost
     lines.push(clampLine([{ text: `${stamp(Date.now())} note   ${lastContentfulLine(activity.responseText)}`, color: "dim" }], width));
   }
   if (record.status === "running" || record.status === "queued" || record.status === "paused") {
-    const doing = activity ? describeActivity(activity.activeTools, activity.responseText) : "thinking…";
+    const doing = activity
+      ? describeActivity(
+          activity.activeTools,
+          activity.responseText,
+          activity.lastTool,
+          activity.lastActivity === "tool",
+        )
+      : "thinking…";
     lines.push(clampLine([{ text: `${stamp(Date.now())} still ${record.status} — ${doing}`, color: "dim" }], width));
   }
   if (record.completedAt != null) {

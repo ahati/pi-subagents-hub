@@ -411,7 +411,7 @@ export function createAgentTool(deps: AgentToolDeps) {
           durationMs: Date.now() - startedAt,
           status: "running",
           activity: queuedAhead === undefined
-            ? describeActivity(fgState.activeTools, fgState.responseText)
+            ? describeActivity(fgState.activeTools, fgState.responseText, fgState.lastTool, fgState.lastActivity === "tool")
             : `queued — waiting for a foreground slot${queuedAhead > 0 ? ` (${queuedAhead} ahead)` : ""}`,
           spinnerFrame: spinnerFrame % SPINNER.length,
           backgroundHint: handoffId !== undefined && foregroundHandoffs.keys().next().value === handoffId,

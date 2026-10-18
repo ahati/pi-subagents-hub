@@ -9,6 +9,9 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Subagent activity subtext shows in-flight and completed tool calls instead of freezing on initial narration.** When an agent streamed conversational text on its first turn, subsequent turns without preamble left the subtext stuck on the opening sentence because `responseText` was never cleared and took precedence over tool activity. `observeRun` now tracks in-flight tool calls (`toolcall_start`/`toolcall_end`) as they stream from the model rather than only during sub-millisecond execution, the tracker records `lastActivity` sequence between text and tools, and `describeActivity` prioritizes completed tool calls (`describeCompletedToolCall`) over stale narration whenever a tool has completed more recently.
+
 ## [2026.10.18-r3] - 2026-10-18
 
 ### Fixed

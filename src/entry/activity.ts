@@ -25,6 +25,7 @@ export function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => 
     maxTurns,
     responseText: "",
     lastTool: undefined,
+    lastActivity: undefined,
     session: undefined,
   };
 
@@ -33,7 +34,8 @@ export function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => 
       if (activity.type === "start") {
         // Live events pair by pi's toolCallId; without one, ends match by tool name.
         const key = activity.toolCallId ?? `${activity.toolName}#${syntheticCall++}`;
-        state.activeTools.set(key, { toolName: activity.toolName, args: activity.args });
+        const existing = state.activeTools.get(key);
+        state.activeTools.set(key, { toolName: activity.toolName, args: activity.args ?? existing?.args });
       } else if (activity.type === "end") {
         const key = activity.toolCallId
           ?? [...state.activeTools.entries()].find(([, call]) => call.toolName === activity.toolName)?.[0];
@@ -43,6 +45,7 @@ export function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => 
         // narrate little, instead of falling back to thinking… (#181).
         state.lastTool = call ?? { toolName: activity.toolName };
         state.toolUses++;
+        state.lastActivity = "tool";
       }
       // A "warning" probe (model-error/tools-error/extension-error) is a
       // one-shot diagnostic, not a tool use: nothing to paint, nothing to count.
@@ -50,10 +53,12 @@ export function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => 
     },
     onTextDelta: (_delta: string, fullText: string) => {
       state.responseText = fullText;
+      state.lastActivity = "text";
       onStreamUpdate?.();
     },
     onTurnEnd: (turnCount: number) => {
       state.turnCount = turnCount;
+      if (state.activeTools.size > 0) state.activeTools.clear();
       onStreamUpdate?.();
     },
     onSessionCreated: (session: unknown) => {

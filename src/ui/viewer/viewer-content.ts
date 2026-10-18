@@ -213,7 +213,12 @@ export function buildContentLinesUncached(width: number, ctx: ContentBuilderCont
   }
 
   if (record.status === "running" && activity) {
-    const act = describeActivity(activity.activeTools, activity.responseText);
+    const act = describeActivity(
+      activity.activeTools,
+      activity.responseText,
+      activity.lastTool,
+      activity.lastActivity === "tool",
+    );
     lines.push(truncateToWidth(th.fg("accent", "▍ ") + th.fg("dim", act), width));
   }
 
