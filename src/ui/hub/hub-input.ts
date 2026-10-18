@@ -8,7 +8,7 @@ import { currentPhaseIndex, type PhaseGroup, type WorkflowAgentEntry } from "../
 import type { ConversationViewer } from "../conversation-viewer.js";
 import { copyRecordResult } from "../copy-result.js";
 import type { FleetWorkflow } from "../fleet-list.js";
-import { parseMouseInput } from "../terminal-mouse.js";
+import { parseMouseInput, parseTerminalMouseEvents, type TerminalMouseEvent } from "../terminal-mouse.js";
 import { runGroups } from "./hub-panes.js";
 import {
   type AgentHubDeps,
@@ -64,12 +64,18 @@ export interface AgentHubInputHost {
   hasScope?(): boolean;
   popScope?(): void;
   scopeParentName?(): string | undefined;
+  handleTerminalMouseEvent?(event: TerminalMouseEvent): void;
 }
 
 export function dispatchHubInput(host: AgentHubInputHost, data: string): void {
   const mouse = parseMouseInput(data);
   if (mouse.sawMouse) {
     if (mouse.wheelDelta !== 0) host.applyWheel(mouse.wheelDelta);
+    if (host.handleTerminalMouseEvent) {
+      for (const ev of parseTerminalMouseEvents(data)) {
+        if (ev.type !== "wheel") host.handleTerminalMouseEvent(ev);
+      }
+    }
     return;
   }
 

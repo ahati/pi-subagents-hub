@@ -139,6 +139,9 @@ export const isHeaderRule = (row: PaneRow | undefined): row is { kind: "headerRu
 
 export interface HubMouseEvent {
   type: string;
+  button?: string;
+  x?: number;
+  y?: number;
   wheelDelta?: number;
 }
 
@@ -196,6 +199,7 @@ export interface HubResumeState {
   logScroll?: number;
   detailOpen?: boolean;
   scopeStack?: string[];
+  listWidth?: number;
 }
 
 export interface AgentHubInitial {

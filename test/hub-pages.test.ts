@@ -114,6 +114,8 @@ function harness(
  * a surface that moved it fails these tests instead of redefining them.
  */
 const DIVIDER = 1 + MASTER_LIST_WIDTH + 2 * PANE_PADDING;
+const isDivider = (ch: string | undefined) => ch === "│" || ch === "▒" || ch === "▓";
+const isSplitRow = (line: string) => line.startsWith("│") && isDivider(line[DIVIDER]);
 /** The cells either side of the pane divider, measured from the line itself. */
 const leftCell = (line: string) => line.slice(1, DIVIDER);
 const rightCell = (line: string) => line.slice(DIVIDER + 1);
@@ -134,10 +136,10 @@ describe("hub pane invariant — detail is always on the right", () => {
       // A body row is either full-width or split at the master cell's edge —
       // no other interior bar is allowed.
       for (const [index, ch] of [...line].entries()) {
-        if (ch === "│" && index > 0 && index < line.length - 1) expect(index, line).toBe(DIVIDER);
+        if (isDivider(ch) && index > 0 && index < line.length - 1) expect(index, line).toBe(DIVIDER);
       }
     }
-    const split = body.filter(l => l.indexOf("│", 1) === DIVIDER);
+    const split = body.filter(isSplitRow);
     expect(split.length).toBeGreaterThan(5);
     // Teeth: the master cell's content is exactly the section header — a torn
     // or mis-measured frame fails this, not just the width checks above.
@@ -214,7 +216,7 @@ describe("the header block every right pane opens with", () => {
   const DETAIL_WIDTH = 95;
   /** The right cell's rows, content only. */
   const rightRows = (frame: string[]) => frame
-    .filter(l => l.startsWith("│") && l.indexOf("│", 1) === DIVIDER)
+    .filter(isSplitRow)
     .map(l => rightCell(l).slice(1, 1 + DETAIL_WIDTH));
   /** The three identity rows: the header line, the `↳` line and the header rule. */
   const identity = (frame: string[]) => rightRows(frame).slice(0, 3);
@@ -339,7 +341,7 @@ describe("the run's state mark and its item cursor", () => {
   );
   /** The split rows' right cells — where the run's phases and agents live. */
   const runPane = (frame: string[]) => frame
-    .filter(l => l.startsWith("│") && l.indexOf("│", 1) === DIVIDER)
+    .filter(isSplitRow)
     .map(rightCell)
     .join("\n");
   const marks = (pane: string) => pane.split("❯").length - 1;
@@ -535,7 +537,7 @@ describe("the run's state mark and its item cursor", () => {
     h.press("\r"); // W
     h.press("\r"); // WA — migrate's first agent (m-2)
     const left = h.frame()
-      .filter(l => l.startsWith("│") && l.indexOf("│", 1) === DIVIDER)
+      .filter(isSplitRow)
       .map(leftCell)
       .join("\n");
     expect(left).toMatch(/❯ . m-2/);
@@ -550,7 +552,7 @@ describe("the run's state mark and its item cursor", () => {
     h.press("\r"); // W
     h.press("l"); // L
     const left = h.frame()
-      .filter(l => l.startsWith("│") && l.indexOf("│", 1) === DIVIDER)
+      .filter(isSplitRow)
       .map(leftCell)
       .join("\n");
     expect(left).toContain("PHASES");
@@ -841,7 +843,7 @@ describe("size ladder", () => {
     // Top edge, six split body rows, band rule, footer, bottom edge.
     const body = frame.slice(1, -3);
     expect(body).toHaveLength(6);
-    expect(body.every(l => l.indexOf("│", 1) === DIVIDER)).toBe(true);
+    expect(body.every(isSplitRow)).toBe(true);
     expect(frame.at(-3)).toContain("┴");
     expect(frame.at(-1)!.endsWith("╯")).toBe(true);
   });
@@ -857,11 +859,11 @@ describe("size ladder", () => {
     // divider — above the body.
     expect(frame[1]).toContain("> a");
     expect([...frame[1]].filter(ch => ch === "│")).toHaveLength(2);
-    expect(frame[1][DIVIDER]).not.toBe("│");
+    expect(isDivider(frame[1][DIVIDER])).toBe(false);
     // The body gives up the row the filter takes: five, not six.
     const body = frame.slice(2, -3);
     expect(body).toHaveLength(5);
-    expect(body.every(l => l.indexOf("│", 1) === DIVIDER)).toBe(true);
+    expect(body.every(isSplitRow)).toBe(true);
   });
 });
 
@@ -950,7 +952,7 @@ describe("per-row keys", () => {
  */
 /** The right cell's content, trimmed of the frame's pad columns and border. */
 const detailRows = (frame: string[]) => frame
-  .filter(l => l.startsWith("│") && l.indexOf("│", 1) === DIVIDER)
+  .filter(isSplitRow)
   .map(l => rightCell(l).slice(1, 96));
 
 describe("P8 — roster grammar", () => {
@@ -998,7 +1000,7 @@ describe("P8 — roster grammar", () => {
     h.open();
     // Six body rows: the list is windowed, never the whole roster.
     const names = (frame: string[]) => frame
-      .filter(l => l.startsWith("│") && l.indexOf("│", 1) === DIVIDER)
+      .filter(isSplitRow)
       .map(leftCell)
       .join("\n");
     expect(names(h.frame(120))).toContain("❯ ● agent-0");
@@ -1061,7 +1063,7 @@ describe("P8 — the glyph set", () => {
     h.press(DOWN); // the parked run row
     expect(h.frame().join("\n")).toContain("‖ migrate-v2");
     h.press("\r"); // W — the run's owned agent says why it looks alive
-    const pane = h.frame().filter(l => l.startsWith("│") && l.indexOf("│", 1) === DIVIDER).map(rightCell).join("\n");
+    const pane = h.frame().filter(isSplitRow).map(rightCell).join("\n");
     expect(pane).toContain("‖ m-1");
     expect(pane).toContain("run paused");
   });

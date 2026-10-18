@@ -1208,3 +1208,74 @@ describe("agent hub Pi-native window chrome", () => {
     h.components.at(-1)?.dispose?.();
   });
 });
+
+describe("agent hub draggable divider", () => {
+  it("drags the divider to resize list pane, clamped between 18 and 50% of width", () => {
+    const h = harness([makeRecord({ id: "a1", alias: "worker", description: "do work" })]);
+    h.open();
+    const hub = h.components.at(-1)!;
+    hub.render(100);
+
+    // Default listWidth is 18. Divider column is 1 + leftCellWidth = 1 + (18 + 2) = 21.
+    expect(hub.listWidth).toBe(18);
+
+    // Press near the divider (col 21)
+    const pressResult = hub.handleMouse({ type: "press", button: "left", x: 21, y: 10 });
+    expect(pressResult).toEqual({ handled: true, capture: true });
+    expect(hub.isDraggingDivider).toBe(true);
+
+    // Drag right by 10 columns (to col 31)
+    hub.handleMouse({ type: "drag", button: "left", x: 31, y: 10 });
+    expect(hub.listWidth).toBe(28); // 18 + (31 - 21) = 28
+
+    // Drag further right past 50% max (50% of 100 = 50 cols)
+    hub.handleMouse({ type: "drag", button: "left", x: 80, y: 10 });
+    expect(hub.listWidth).toBe(50); // clamped to 50% = 50
+
+    // Drag left below min 18
+    hub.handleMouse({ type: "drag", button: "left", x: 10, y: 10 });
+    expect(hub.listWidth).toBe(18); // clamped to min 18
+
+    // Release terminates drag
+    hub.handleMouse({ type: "release", button: "left", x: 10, y: 10 });
+    expect(hub.isDraggingDivider).toBe(false);
+
+    hub.dispose?.();
+  });
+
+  it("handles dragging via terminal mouse escape sequences in regular mode", () => {
+    const h = harness([makeRecord({ id: "a1", alias: "worker", description: "do work" })], {}, { tuiMode: "regular" });
+    h.open();
+    const hub = h.components.at(-1)!;
+    hub.render(100);
+
+    expect(hub.listWidth).toBe(18);
+
+    // Press at terminal column 22 (1-based -> local x = 21)
+    h.press("\x1b[<0;22;10M");
+    expect(hub.isDraggingDivider).toBe(true);
+
+    // Drag to terminal column 32 (local x = 31)
+    h.press("\x1b[<32;32;10M");
+    expect(hub.listWidth).toBe(28);
+
+    // Release
+    h.press("\x1b[<0;32;10m");
+    expect(hub.isDraggingDivider).toBe(false);
+
+    hub.dispose?.();
+  });
+
+  it("renders shaded glyph characters in the middle rows of the divider", () => {
+    const h = harness([makeRecord({ id: "a1", alias: "worker", description: "do work" })]);
+    h.open();
+    const hub = h.components.at(-1)!;
+    const lines = hub.render(100);
+
+    // The divider contains shaded glyph ▒
+    const containsShaded = lines.some(line => line.includes("▒"));
+    expect(containsShaded).toBe(true);
+
+    hub.dispose?.();
+  });
+});

@@ -5,6 +5,7 @@ import {
   ENABLE_TERMINAL_MOUSE,
   enableTerminalMouse,
   parseMouseInput,
+  parseTerminalMouseEvents,
 } from "../src/ui/terminal-mouse.js";
 
 /** SGR mouse report helper. */
@@ -87,5 +88,31 @@ describe("enable/disableTerminalMouse", () => {
     expect(tui.terminal.write).toHaveBeenCalledWith(DISABLE_TERMINAL_MOUSE);
     expect(() => disableTerminalMouse(undefined)).not.toThrow();
     expect(() => disableTerminalMouse({ terminal: { write: () => { throw new Error("closed"); } } })).not.toThrow();
+  });
+});
+
+describe("parseTerminalMouseEvents", () => {
+  it("parses press, drag, and release events with coordinates", () => {
+    const press = parseTerminalMouseEvents(mouse(0, false, 22, 10));
+    expect(press).toEqual([{ type: "press", button: "left", x: 22, y: 10 }]);
+
+    const drag = parseTerminalMouseEvents(mouse(32, false, 28, 10));
+    expect(drag).toEqual([{ type: "drag", button: "left", x: 28, y: 10 }]);
+
+    const release = parseTerminalMouseEvents(mouse(0, true, 28, 10));
+    expect(release).toEqual([{ type: "release", button: "left", x: 28, y: 10 }]);
+  });
+
+  it("parses wheel events", () => {
+    const up = parseTerminalMouseEvents(mouse(64, false, 15, 8));
+    expect(up).toEqual([{ type: "wheel", button: "none", x: 15, y: 8, wheelDelta: -3 }]);
+
+    const down = parseTerminalMouseEvents(mouse(65, false, 15, 8));
+    expect(down).toEqual([{ type: "wheel", button: "none", x: 15, y: 8, wheelDelta: 3 }]);
+  });
+
+  it("returns empty array for non-mouse input", () => {
+    expect(parseTerminalMouseEvents("hello")).toEqual([]);
+    expect(parseTerminalMouseEvents("")).toEqual([]);
   });
 });

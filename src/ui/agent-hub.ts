@@ -87,9 +87,11 @@ import {
   TICK_MS,
   type WorkflowRunControls,
 } from "./hub/hub-types.js";
-import { disableTerminalMouse, enableTerminalMouse } from "./terminal-mouse.js";
+import { disableTerminalMouse, enableTerminalMouse, type TerminalMouseEvent } from "./terminal-mouse.js";
 import type { ViewerKeybindings } from "./viewer-keys.js";
 import {
+  clampMasterListWidth,
+  MASTER_LIST_WIDTH,
   masterPaneGeometry,
   type PaneBox,
   PI_PANE_BOX,
@@ -172,6 +174,10 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   private disposed = false;
   private mouseCaptured = false;
   scopeStack: string[] = [];
+  listWidth: number;
+  isDraggingDivider = false;
+  private dragStartX = 0;
+  private dragStartListWidth = MASTER_LIST_WIDTH;
 
   constructor(
     public tui: any,
@@ -195,6 +201,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     this.logScroll = this.resume.logScroll ?? 0;
     this.detailOpen = this.resume.detailOpen ?? false;
     this.scopeStack = this.resume.scopeStack ? [...this.resume.scopeStack] : [];
+    this.listWidth = this.resume.listWidth ?? MASTER_LIST_WIDTH;
     if (this.page === "R" && this.focusId !== undefined) {
       const record = this.deps.manager.listAgents().find(a => a.id === this.focusId);
       if (record?.session) this.ensureViewer(record);
@@ -215,12 +222,73 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     return this.effectiveStyle() === "pi" ? PI_PANE_BOX : UNICODE_PANE_BOX;
   }
 
-  handleMouse(event: HubMouseEvent): { handled?: boolean } | undefined {
-    if (event.type !== "wheel") return undefined;
-    const delta = event.wheelDelta ?? 0;
-    if (delta === 0) return undefined;
-    this.applyWheel(delta);
-    return { handled: true };
+  handleMouse(event: HubMouseEvent): { handled?: boolean; capture?: boolean } | undefined {
+    if (event.type === "wheel") {
+      const delta = event.wheelDelta ?? 0;
+      if (delta === 0) return undefined;
+      this.applyWheel(delta);
+      return { handled: true };
+    }
+
+    if (this.stackedMode()) {
+      if (this.isDraggingDivider) this.isDraggingDivider = false;
+      return undefined;
+    }
+
+    const width = this.lastWidth ?? this.tui.terminal?.columns ?? 80;
+    const panes = masterPaneGeometry(width, this.listWidth);
+    const dividerCol = 1 + panes.leftCellWidth;
+
+    if (event.type === "press") {
+      if (event.button === "left" || event.button === undefined) {
+        if (event.x !== undefined && Math.abs(event.x - dividerCol) <= 1) {
+          this.isDraggingDivider = true;
+          this.dragStartX = event.x;
+          this.dragStartListWidth = panes.listWidth;
+          this.requestRender();
+          return { handled: true, capture: true };
+        }
+      }
+      return undefined;
+    }
+
+    if (event.type === "drag" || event.type === "move") {
+      if (!this.isDraggingDivider) return undefined;
+      if (event.x !== undefined) {
+        const deltaX = event.x - this.dragStartX;
+        const requested = this.dragStartListWidth + deltaX;
+        const clamped = clampMasterListWidth(width, requested);
+        if (clamped !== this.listWidth) {
+          this.listWidth = clamped;
+          this.requestRender();
+        }
+      }
+      return { handled: true };
+    }
+
+    if (event.type === "release" || event.type === "click") {
+      if (this.isDraggingDivider) {
+        this.isDraggingDivider = false;
+        this.requestRender();
+        return { handled: true };
+      }
+      return undefined;
+    }
+
+    return undefined;
+  }
+
+  handleTerminalMouseEvent(ev: TerminalMouseEvent): void {
+    const width = this.lastWidth ?? this.tui.terminal?.columns ?? 80;
+    const termWidth = this.tui.terminal?.columns ?? width;
+    const overlayCol = this.popup ? Math.max(0, Math.floor((termWidth - width) / 2)) : 0;
+    const localX = (ev.x - 1) - overlayCol;
+    this.handleMouse({
+      type: ev.type,
+      button: ev.button,
+      x: localX,
+      y: ev.y - 1,
+    });
   }
 
   applyWheel(delta: number): void {
@@ -398,6 +466,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     this.resume.logScroll = this.logScroll;
     this.resume.detailOpen = this.detailOpen;
     this.resume.scopeStack = [...this.scopeStack];
+    this.resume.listWidth = this.listWidth;
   }
 
   close(): void {
@@ -491,10 +560,11 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     const body: WindowRow[] = [];
     this.logReadout = undefined;
 
+    let panes: ReturnType<typeof masterPaneGeometry> | undefined;
     if (!twoPane) {
       body.push(...this.stackedLines(width - 4, bodyRows));
     } else {
-      const panes = masterPaneGeometry(width);
+      panes = masterPaneGeometry(width, this.listWidth);
       const left = this.leftPaneLines(panes.listWidth, bodyRows);
       const right = this.rightPaneLines(panes.detailWidth, bodyRows);
       for (let i = 0; i < bodyRows; i++) {
@@ -513,10 +583,11 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
         width,
         box: this.effectiveBox(),
         style: this.effectiveStyle(),
-        panes: twoPane ? masterPaneGeometry(width) : undefined,
+        panes: twoPane ? panes : undefined,
         title: this.effectiveStyle() === "pi" ? undefined : HUB_TITLE,
         rows,
         ellipsis: "…",
+        dividerHandle: twoPane ? { active: this.isDraggingDivider } : undefined,
       }),
       this.theme,
       this.effectiveStyle(),

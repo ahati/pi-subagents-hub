@@ -62,6 +62,54 @@ export function parseMouseInput(data: string): ParsedMouseInput {
   return { wheelDelta, sawMouse };
 }
 
+export interface TerminalMouseEvent {
+  type: "press" | "drag" | "release" | "move" | "wheel";
+  button: "left" | "middle" | "right" | "none";
+  x: number;
+  y: number;
+  wheelDelta?: number;
+}
+
+/**
+ * Extract structured pointer events from raw SGR mouse reports.
+ */
+export function parseTerminalMouseEvents(data: string): TerminalMouseEvent[] {
+  if (!data.includes("\x1b[<")) return [];
+  const events: TerminalMouseEvent[] = [];
+  SGR_MOUSE_RE.lastIndex = 0;
+  for (let match = SGR_MOUSE_RE.exec(data); match !== null; match = SGR_MOUSE_RE.exec(data)) {
+    const rawButton = Number(match[1]);
+    const x = Number(match[2]);
+    const y = Number(match[3]);
+    const isRelease = match[4] === "m";
+
+    if ((rawButton & 64) !== 0) {
+      const direction = rawButton & 3;
+      let wheelDelta = 0;
+      if (direction === 0) wheelDelta = -WHEEL_LINES_PER_NOTCH;
+      else if (direction === 1) wheelDelta = WHEEL_LINES_PER_NOTCH;
+      events.push({ type: "wheel", button: "none", x, y, wheelDelta });
+      continue;
+    }
+
+    if (isRelease) {
+      events.push({ type: "release", button: "left", x, y });
+      continue;
+    }
+
+    const isMotion = (rawButton & 32) !== 0;
+    const btnCode = rawButton & 3;
+    const button = btnCode === 0 ? "left" : btnCode === 1 ? "middle" : btnCode === 2 ? "right" : "none";
+
+    if (isMotion) {
+      events.push({ type: button === "none" ? "move" : "drag", button, x, y });
+    } else {
+      events.push({ type: "press", button, x, y });
+    }
+  }
+  return events;
+}
+
 /** The terminal handle the panel writes mouse-mode sequences to. */
 interface WritableTerminal {
   write?(data: string): void;

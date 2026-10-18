@@ -415,9 +415,42 @@ export function paneGeometry(width: number, listWidth = MASTER_LIST_WIDTH, pad =
  * up; that proportional policy
  * stays exported for the frame's own tests; nothing in src calls it.
  */
-export function masterPaneGeometry(width: number, pad = PANE_PADDING): PaneGeometry {
+/**
+ * Clamp the master (roster) list content columns: minimum 18 columns,
+ * maximum 50% of the window width, capped by available columns so the detail
+ * pane never loses its last column.
+ */
+export function clampMasterListWidth(
+  width: number,
+  requested: number = MASTER_LIST_WIDTH,
+  pad = PANE_PADDING,
+): number {
+  const min = MASTER_LIST_WIDTH;
+  const max = Math.floor(width * 0.5);
   const available = Math.max(2, width - FRAME_BARS - 4 * pad);
-  const list = Math.max(1, Math.min(MASTER_LIST_WIDTH, available - 1));
+  const ceiling = Math.min(max, available - 1);
+  if (ceiling < min) return Math.max(1, ceiling);
+  return Math.max(min, Math.min(requested, ceiling));
+}
+
+export function masterPaneGeometry(
+  width: number,
+  listWidthOrPad?: number,
+  explicitPad?: number,
+): PaneGeometry {
+  let listWidth: number | undefined;
+  let pad = PANE_PADDING;
+  if (explicitPad !== undefined) {
+    listWidth = listWidthOrPad;
+    pad = explicitPad;
+  } else if (listWidthOrPad !== undefined) {
+    if (listWidthOrPad <= 1) {
+      pad = listWidthOrPad;
+    } else {
+      listWidth = listWidthOrPad;
+    }
+  }
+  const list = clampMasterListWidth(width, listWidth, pad);
   return geometryForList(width, list, pad);
 }
 
@@ -508,6 +541,17 @@ function ruleCell(cell: RuleCell): WorkflowCardLine {
  * — the hub's roster, preview and transcript panes are all calls to this
  * function with different rows.
  */
+export interface DividerHandleOptions {
+  /** First split row (0-based) where the handle glyph begins. */
+  startRow?: number;
+  /** End split row (0-based, exclusive) where the handle glyph ends. */
+  endRow?: number;
+  /** Custom glyph to render; defaults to shaded block "▒" (or "▓" if active). */
+  glyph?: string;
+  /** Whether the handle is currently active/being dragged (highlights the handle). */
+  active?: boolean;
+}
+
 export function renderWindow(options: {
   width: number;
   box: PaneBox;
@@ -520,6 +564,7 @@ export function renderWindow(options: {
   title?: string;
   ellipsis?: string;
   style?: UIStyle;
+  dividerHandle?: boolean | DividerHandleOptions;
 }): WorkflowCardLine[] {
   const { width, box, panes } = options;
   const isPi = (options.style === "pi" || options.style === undefined) && (box === PI_PANE_BOX || box.topLeft === "\u2594" || box.topLeft === "─");
@@ -528,6 +573,20 @@ export function renderWindow(options: {
   const outerLeft: WorkflowCardSegment[] = isPi ? [{ text: " " }] : [edge(box.leftVertical ?? box.vertical)];
   const outerRight: WorkflowCardSegment[] = isPi ? [{ text: " " }] : [edge(box.rightVertical ?? box.vertical)];
   const bar = [edge(box.vertical)];
+  const handleOpt = typeof options.dividerHandle === "object" ? options.dividerHandle : {};
+  const splitRowsCount = panes && options.dividerHandle
+    ? options.rows.filter(r => r.kind === "split" || r.kind === "headerRule").length
+    : 0;
+  const handleSize = splitRowsCount >= 10 ? 5 : splitRowsCount >= 5 ? 3 : (splitRowsCount > 0 ? 1 : 0);
+  const defaultStart = Math.max(0, Math.floor((splitRowsCount - handleSize) / 2));
+  const handleStart = handleOpt.startRow ?? defaultStart;
+  const handleEnd = handleOpt.endRow ?? (handleStart + handleSize);
+  const handleActive = handleOpt.active ?? false;
+  const defaultGlyph = box === ASCII_PANE_BOX ? (handleActive ? "#" : ":") : (handleActive ? "▓" : "▒");
+  const handleGlyph = handleOpt.glyph ?? defaultGlyph;
+  const handleBar: WorkflowCardSegment[] = [
+    { text: handleGlyph, color: handleActive ? "accent" : "muted", bold: handleActive },
+  ];
   const rightCell = panes ? width - panes.leftCellWidth - FRAME_BARS : width - 2;
   const lines: WorkflowCardLine[] = [];
 
@@ -540,6 +599,7 @@ export function renderWindow(options: {
         : frameEdge(width, box, "top", titleOf(Math.max(0, width - 2))));
   lines.push([topEdge]);
 
+  let splitRowIndex = 0;
   for (const item of options.rows) {
     switch (item.kind) {
       case "full": {
@@ -556,11 +616,14 @@ export function renderWindow(options: {
         const leftBg = item.left?.find(seg => seg.bg)?.bg;
         const oLeft: WorkflowCardSegment[] = isPi ? [{ text: " ", bg: leftBg }] : outerLeft;
         const oRight: WorkflowCardSegment[] = outerRight;
+        const isHandle = options.dividerHandle && splitRowIndex >= handleStart && splitRowIndex < handleEnd;
+        const midBar = isHandle ? handleBar : bar;
+        splitRowIndex++;
         lines.push(panes
           ? [
               ...oLeft,
               ...paneCell(item.left, panes.leftCellWidth, panes.pad, ellipsis),
-              ...bar,
+              ...midBar,
               ...paneCell(item.right, rightCell, panes.pad, ellipsis),
               ...oRight,
             ]
@@ -571,11 +634,14 @@ export function renderWindow(options: {
         const leftBg = item.left?.find(seg => seg.bg)?.bg;
         const oLeft: WorkflowCardSegment[] = isPi ? [{ text: " ", bg: leftBg }] : outerLeft;
         const oRight: WorkflowCardSegment[] = outerRight;
+        const isHandle = options.dividerHandle && splitRowIndex >= handleStart && splitRowIndex < handleEnd;
+        const midBar = isHandle ? handleBar : bar;
+        splitRowIndex++;
         lines.push(panes
           ? [
               ...oLeft,
               ...paneCell(item.left, panes.leftCellWidth, panes.pad, ellipsis),
-              ...bar,
+              ...midBar,
               ...headerRuleCell(rightCell, panes.pad, box),
               ...oRight,
             ]

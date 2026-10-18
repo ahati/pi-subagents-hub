@@ -20,6 +20,7 @@ UI-layer enhancements over upstream:
 - **Main-window-quality tool rendering** — tool calls and results render with pi's own per-tool renderers (edit diffs, highlighted reads, bash command blocks), wired exactly like the main transcript
 - **`→` closes the FleetView** — the key that opens the list (`←`/`↓`) now has a mirror: `→` dismisses it entirely. `↓`/`←` recall a dismissed list, and a fresh batch of agents re-shows it on its own
 - **Mouse wheel scrolling** — wheel over a conversation scrolls it; the roster page's right pane is the selected agent's conversation, so the wheel scrolls it there, and with a run row selected it moves the roster selection. Works in **both** TUI modes: fullscreen uses pi's native mouse dispatch, while in regular mode the panel captures terminal mouse reporting for its own lifetime and restores it on close (so the terminal's native scrollback and mouse text-selection are only borrowed while a panel is open — hold Shift to select text as usual)
+- **Draggable pane divider** — click and drag the divider bar in the two-pane Agent Hub to adjust the relative widths of the master list and detail pane. The handle in the middle of the divider renders shaded glyphs (`▒` idle, `▓` while active). Clamped between 18 columns and 50% width; works in both fullscreen and regular TUI mouse modes
 - **Fixed**: opening an agent from `/agents` no longer stacks the menu dialog on top of the panel (keyboard and close behavior restored)
 
 > Regular TUI mode has no mouse support of its own — pi only parses mouse input in `tuiMode: "fullscreen"` (in regular mode the terminal owns the wheel for its scrollback). The panel therefore enables mouse reporting itself while it is open and restores the terminal when it closes.
@@ -1142,7 +1143,7 @@ src/
     fleet-list.ts         # FleetView: navigable agent list below the editor
     agent-hub.ts          # The Agents & Workflows window: roster + pages, popup or full-screen twin
     workflow-menu.ts      # /agents → Workflows entry; opens the hub on a run's page
-    terminal-mouse.ts     # Wheel support for regular TUI mode (mouse capture/restore)
+    terminal-mouse.ts     # Wheel and drag support for regular TUI mode (mouse capture/restore, SGR parser)
     conversation-viewer.ts # Live conversation overlay for viewing agent sessions
     copy-result.ts        # `c` — copy an agent's settled result (hub transcript + log pages)
     viewer-keys.ts        # Viewer key matchers (scroll + app.tools.expand) resolved through user keybindings

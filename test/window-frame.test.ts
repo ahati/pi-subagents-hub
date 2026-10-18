@@ -13,6 +13,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import {
   ASCII_PANE_BOX,
+  clampMasterListWidth,
   type FooterHint,
   FRAME_BARS,
   footerBand,
@@ -32,7 +33,6 @@ import {
   UNICODE_PANE_BOX,
   WINDOW_CHROME_ROWS,
 } from "../src/ui/window-frame.js";
-import type { WorkflowCardLine } from "../src/ui/workflow-card.js";
 
 
 describe("pane geometry", () => {
@@ -506,4 +506,91 @@ describe("segment background propagation", () => {
     expect(fullRow[3]?.bg).toBe("selectedBg");
   });
 });
+
+describe("clampMasterListWidth", () => {
+  it("clamps to minimum 18 columns", () => {
+    expect(clampMasterListWidth(100, 10)).toBe(18);
+    expect(clampMasterListWidth(100, 18)).toBe(18);
+    expect(clampMasterListWidth(100)).toBe(18);
+  });
+
+  it("clamps to maximum 50% of the window width", () => {
+    expect(clampMasterListWidth(100, 60)).toBe(50);
+    expect(clampMasterListWidth(80, 50)).toBe(40);
+    expect(clampMasterListWidth(60, 40)).toBe(30);
+  });
+
+  it("allows requested widths between 18 and 50%", () => {
+    expect(clampMasterListWidth(100, 25)).toBe(25);
+    expect(clampMasterListWidth(100, 45)).toBe(45);
+    expect(clampMasterListWidth(120, 50)).toBe(50);
+  });
+
+  it("falls back gracefully when total width is narrower than minimum", () => {
+    expect(clampMasterListWidth(12)).toBeLessThan(18);
+  });
+});
+
+describe("divider handle", () => {
+  it("renders shaded glyphs in the middle rows of the divider bar", () => {
+    const panes = masterPaneGeometry(60);
+    const rows = Array.from({ length: 9 }, (_, i) => ({
+      kind: "split" as const,
+      left: [{ text: `item ${i}` }],
+      right: [{ text: `detail ${i}` }],
+    }));
+
+    const lines = renderWindow({
+      width: 60,
+      box: UNICODE_PANE_BOX,
+      panes,
+      rows,
+      dividerHandle: true,
+    });
+
+    // Top border is line 0. Body rows are lines 1 to 9.
+    // In 9 rows, handle size is 3 (centered at rows 3, 4, 5 of the 9 body rows -> lines 4, 5, 6).
+    const dividerChars = lines.slice(1, 10).map(line => {
+      let col = 0;
+      for (const seg of line) {
+        if (col === 1 + panes.leftCellWidth) return seg.text;
+        col += visibleWidth(seg.text);
+      }
+      return undefined;
+    });
+
+    expect(dividerChars[0]).toBe("│");
+    expect(dividerChars[1]).toBe("│");
+    expect(dividerChars[2]).toBe("│");
+    expect(dividerChars[3]).toBe("▒");
+    expect(dividerChars[4]).toBe("▒");
+    expect(dividerChars[5]).toBe("▒");
+    expect(dividerChars[6]).toBe("│");
+    expect(dividerChars[7]).toBe("│");
+    expect(dividerChars[8]).toBe("│");
+  });
+
+  it("renders active shaded glyph ▓ when dragging", () => {
+    const panes = masterPaneGeometry(60);
+    const rows = Array.from({ length: 5 }, (_, i) => ({
+      kind: "split" as const,
+      left: [{ text: `item ${i}` }],
+      right: [{ text: `detail ${i}` }],
+    }));
+
+    const lines = renderWindow({
+      width: 60,
+      box: UNICODE_PANE_BOX,
+      panes,
+      rows,
+      dividerHandle: { active: true },
+    });
+
+    const handleSegments = lines.flatMap(line => line.filter(seg => seg.text === "▓"));
+    expect(handleSegments.length).toBeGreaterThan(0);
+    expect(handleSegments[0]?.color).toBe("accent");
+    expect(handleSegments[0]?.bold).toBe(true);
+  });
+});
+
 
