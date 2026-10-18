@@ -8,7 +8,7 @@ tsconfig.json
 PLAN.md
 SUMMARY.md
 plan/
-media/
+media/*.mp4
 
 # Internal contributor/agent instructions — not for distribution
 AGENTS.md

@@ -8,7 +8,7 @@ A [pi](https://pi.dev) extension that brings **Claude Code-style autonomous sub-
 
 | Windowed View (90% × 70%) | Full-Screen View (`f`) |
 |:---:|:---:|
-| ![Agent Hub Windowed](media/Screenshot-HUB-Windowed.png) | ![Agent Hub Full-screen](media/Screenshot-Hub-FC.png) |
+| ![Agent Hub Windowed](https://raw.githubusercontent.com/ahati/pi-subagents-hub/master/media/Screenshot-HUB-Windowed.png) | ![Agent Hub Full-screen](https://raw.githubusercontent.com/ahati/pi-subagents-hub/master/media/Screenshot-Hub-FC.png) |
 
 ## What this fork adds
 
@@ -1180,4 +1180,4 @@ src/
 
 ## License
 
-MIT — [tintinweb](https://github.com/tintinweb)
+MIT — [tintinweb](https://github.com/tintinweb), [ahati](https://github.com/ahati)

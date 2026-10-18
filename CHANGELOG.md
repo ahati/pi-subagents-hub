@@ -9,6 +9,11 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+## [2026.10.18-r3] - 2026-10-18
+
+### Fixed
+- **Gallery preview and README screenshot URLs for pi.dev and npm.** Swapped relative screenshot paths in `README.md` to absolute raw GitHub URLs so package galleries (like `pi.dev`) and npm mirrors render images directly without 404s, updated `pi.image` in `package.json` to the current hub screenshot, and included `media/*.png` in the npm package distribution.
+
 ## [2026.10.18-r2] - 2026-10-18
 
 ### Added
