@@ -13,7 +13,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # npm provenance
+      id-token: write # npm Trusted Publishing: the job's OIDC token is exchanged for a short-lived publish grant, no NPM_TOKEN secret
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,6 +21,8 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
+      # Node 22 bundles npm 10.x; OIDC trusted publishing needs npm >= 11.5.1
+      - run: npm install -g npm@^11
       - name: Verify tag matches package version
         run: |
           version=$(node -p "require('./package.json').version")
@@ -31,5 +33,3 @@ jobs:
           fi
       - run: npm ci
       - run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
