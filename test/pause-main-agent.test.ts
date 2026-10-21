@@ -149,6 +149,21 @@ async function spawnRunning(
   return /Agent ID: (\S+)/.exec(textOf(r))![1];
 }
 
+/** Spawn one running workflow through the real SubagentWorkflow tool. */
+async function spawnRunningWorkflow(b: BootedPi, name = "wf-flow"): Promise<string> {
+  const script = `export const meta = { name: "${name}", description: "d" };\nawait agent("held");\nreturn 1;\n`;
+  heldRun(resumableSession);
+  const r = await b.tools.get("SubagentWorkflow").execute(
+    "tc-wf",
+    { script },
+    undefined,
+    undefined,
+    ctx({ cwd: hermetic!.dir }),
+  );
+  await flush();
+  return (r as any).details.taskId;
+}
+
 /** A boundary event, as pi's extension runner delivers it. */
 function turnEnd(overrides: Record<string, unknown> = {}) {
   return {
@@ -258,6 +273,26 @@ describe("landing the park", () => {
     // No pending calls: nothing to unwind, so the run must not be aborted.
     expect(landCtx.abort).not.toHaveBeenCalled();
     expect(notified(landCtx.ui.notify, /paus|park/i)).toBe(true);
+  });
+
+  it("parks both active subagents and active workflows on turn_end when armed", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false, workflowsEnabled: true } });
+    const b = bootOnly();
+    await b.lifecycle.get("session_start")({ type: "session_start", reason: "startup" }, ctx({ cwd: hermetic.dir }));
+    const agentId = await spawnRunning(b, resumableSession, "agent-one");
+    const wfId = await spawnRunningWorkflow(b, "wf-one");
+    await arm(b);
+
+    const landCtx = ctx({ isIdle: () => false, abort: vi.fn(), cwd: hermetic.dir });
+    await landBoundary(b.lifecycle.get("turn_end"), turnEnd(), landCtx);
+
+    expect(manager().getRecord(agentId).status).toBe("paused");
+    expect(manifest().list().map(e => e.id)).toEqual([agentId]);
+    expect(manifest().listWorkflows().map(w => w.id)).toEqual([wfId]);
+
+    const parked = mainTurn();
+    expect(parked).toMatchObject({ parked: true, pendingTools: 0 });
+    expect(notified(landCtx.ui.notify, /workflow run/i)).toBe(true);
   });
 
   it("counts pending tool results and aborts the run on turn_end", async () => {

@@ -13,6 +13,7 @@ import { countUnansweredToolCalls } from "../session-continue.js";
 import { getStatusNote } from "../status-note.js";
 import type { AgentRecord, NotificationDetails } from "../types.js";
 import type { AgentActivity } from "../ui/agent-widget.js";
+import { pauseWorkflowTask, type WorkflowTask } from "../workflow/task.js";
 import { escapeXml } from "../xml.js";
 
 export function recordName(record: AgentRecord): string {
@@ -175,6 +176,7 @@ export class ParkGateController {
     manager: AgentManager,
     syncPauseManifest: (ctx: ExtensionContext) => void,
     pauseAgentRecord: (rec: AgentRecord) => string | undefined,
+    workflowTasks?: ReadonlyMap<string, WorkflowTask>,
   ): Promise<void> {
     const branch = ctx.sessionManager?.getBranch?.() ?? [];
     const pendingTools = branch.length > 0 ? countUnansweredToolCalls(branch) : boundaryCount;
@@ -198,6 +200,16 @@ export class ParkGateController {
         else lost++;
       }
     }
+    let pausedWorkflows = 0;
+    if (workflowTasks) {
+      for (const task of workflowTasks.values()) {
+        if (task.status === "running") {
+          if (pauseWorkflowTask(task)) {
+            pausedWorkflows++;
+          }
+        }
+      }
+    }
     syncPauseManifest(ctx);
     const mainTurn: PausedMainTurn = {
       parked: true,
@@ -208,6 +220,7 @@ export class ParkGateController {
     this.pauseStoreFor(ctx).setMainTurn(mainTurn);
     const parts = [`Main turn parked at its boundary (${pendingTools} pending tool call${pendingTools === 1 ? "" : "s"})`];
     if (paused > 0) parts.push(`parked ${paused} agent${paused === 1 ? "" : "s"}`);
+    if (pausedWorkflows > 0) parts.push(`parked ${pausedWorkflows} workflow run${pausedWorkflows === 1 ? "" : "s"}`);
     if (captured > 0) parts.push(`captured ${captured} completed result${captured === 1 ? "" : "s"} for /continue`);
     if (ephemeral > 0) parts.push(`${ephemeral} with no session — /continue re-runs ${ephemeral === 1 ? "it" : "them"} from scratch`);
     if (lost > 0) parts.push(`${lost} without a persisted session — quitting loses ${lost === 1 ? "it" : "them"}`);

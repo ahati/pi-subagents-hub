@@ -277,17 +277,16 @@ export function registerSessionLifecycle(
       delete (globalThis as any)[MANAGER_KEY];
     }
     scheduler.stop();
-    for (const task of workflowTasks.values()) task.abortController.abort();
-    workflowTasks.clear();
-
     if (park.armedPause) {
       park.armedPause = false;
       try {
-        await park.landPark(shutdownCtx, 0, manager, syncPauseManifest, pauseAgentRecord);
+        await park.landPark(shutdownCtx, 0, manager, syncPauseManifest, pauseAgentRecord, workflowTasks);
       } catch {
         // best-effort
       }
     }
+    for (const task of workflowTasks.values()) task.abortController.abort();
+    workflowTasks.clear();
     try {
       const store = park.pauseStoreFor(shutdownCtx);
       const parked = store.getMainTurn();
@@ -327,12 +326,12 @@ export function registerSessionLifecycle(
   pi.on("agent_settled", () => outbox.onAgentEnd());
 
   pi.on("tool_call", async (_event, ctx) => {
-    if (park.armedPause) await park.landPark(ctx, 1, manager, syncPauseManifest, pauseAgentRecord);
+    if (park.armedPause) await park.landPark(ctx, 1, manager, syncPauseManifest, pauseAgentRecord, workflowTasks);
     if (park.parkedMain) await park.holdMainTurnGate(ctx.signal);
     return undefined;
   });
   pi.on("turn_end", async (event, ctx) => {
-    if (park.armedPause) await park.landPark(ctx, event.toolResults.length, manager, syncPauseManifest, pauseAgentRecord);
+    if (park.armedPause) await park.landPark(ctx, event.toolResults.length, manager, syncPauseManifest, pauseAgentRecord, workflowTasks);
     if (park.parkedMain && (event.toolResults.length > 0 || ctx.hasPendingMessages())) ctx.abort();
     return undefined;
   });
