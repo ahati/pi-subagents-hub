@@ -9,6 +9,9 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Clean shutdown releases parked main turn claim and shadow continuation inherits active model.** When quitting after a main turn parked, `session_shutdown` skipped clearing the PID claim if the park had already landed, causing subsequent `/continue` invocations in new or restarted processes to falsely reject with a live claim collision warning. The shutdown handler now always releases the PID claim for the shutting-down process, shadow continuation passes `model`, `thinkingLevel`, and `scopedModels` from the active command context, and already-complete turns notify clearly instead of failing or reporting misleading continuations.
+
 ## [2026.10.18-r4] - 2026-10-18
 
 ### Added

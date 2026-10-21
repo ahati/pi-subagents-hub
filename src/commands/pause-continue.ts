@@ -491,10 +491,15 @@ export async function continueParkedMainTurn(
       agentDir,
       settingsManager,
       resourceLoader: loader,
+      model: ctx.model,
+      thinkingLevel: ctx.thinkingLevel,
+      scopedModels: ctx.scopedModels ? [...ctx.scopedModels] : undefined,
     });
     const result = await continueSessionBare(session);
     if (result.continuationError) {
       ctx.ui.notify(`The parked main turn was healed, but its continuation failed: ${result.continuationError}`, "warning");
+    } else if (result.alreadyComplete) {
+      ctx.ui.notify("The parked main turn was already complete.", "info");
     } else {
       ctx.ui.notify("Continuing the parked main turn — pi reloads the session when it finishes.", "info");
     }

@@ -284,12 +284,18 @@ export function registerSessionLifecycle(
       park.armedPause = false;
       try {
         await park.landPark(shutdownCtx, 0, manager, syncPauseManifest, pauseAgentRecord);
-        const store = park.pauseStoreFor(shutdownCtx);
-        const parked = store.getMainTurn();
-        if (parked) store.setMainTurn({ ...parked, claim: { pid: -1, at: new Date().toISOString() } });
       } catch {
         // best-effort
       }
+    }
+    try {
+      const store = park.pauseStoreFor(shutdownCtx);
+      const parked = store.getMainTurn();
+      if (parked?.claim?.pid === process.pid) {
+        store.setMainTurn({ ...parked, claim: { pid: -1, at: new Date().toISOString() } });
+      }
+    } catch {
+      // best-effort
     }
     manager.abortAll();
     groupJoin.dispose();

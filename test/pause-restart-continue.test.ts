@@ -704,4 +704,19 @@ describe("post-restart /continue wiring", () => {
     expect(onDisk?.mainTurn).toEqual(parkedMainTurn());
     expect(onDisk?.entries ?? []).toEqual([]);
   });
+
+  it("releases mainTurn claim on session_shutdown even when armedPause has already landed", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false } });
+    seedManifest(
+      parkedMainTurn({ claim: { pid: process.pid, at: ts } }),
+      [],
+    );
+
+    bootOnly();
+    const shutdownCtx = continueCtx(join(hermetic.dir, "sess.jsonl"));
+    await booted?.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, shutdownCtx);
+
+    const onDisk = manifestOnDisk();
+    expect(onDisk?.mainTurn?.claim?.pid, "clean shutdown must release the claim").toBe(-1);
+  });
 });
