@@ -127,14 +127,12 @@ Location: `CHANGELOG.md` (single file, [Keep a Changelog](https://keepachangelog
 
 ## Releasing
 
-**Versioning** (all releases are `0.x`, no major bumps):
-
-- `minor` (`0.x.0`) — a notable new feature, or any breaking change.
-- `patch` (`0.x.y`) — bug fixes and smaller additions.
+**Versioning**: Versions are calendar-based (`YYYY.MM.DD-r<n>`, where `r<n>` is the release sequence number for that date).
 
 Before a release:
 
-- Update `CHANGELOG.md` — move the `## [Unreleased]` entries under a new `## [X.Y.Z]` version section, and add a fresh empty `## [Unreleased]` for the next cycle.
+- Update `CHANGELOG.md` — move the `## [Unreleased]` entries under a new `## [YYYY.MM.DD-r<n>] - YYYY-MM-DD` version section, and add a fresh empty `## [Unreleased]` for the next cycle.
+- Update `version` in `package.json` to match `YYYY.MM.DD-r<n>`.
 - Update `README.md` if user-facing behavior changed (features list, settings, usage), and the matching guide in `docs/` if the change touches workflows or the event/RPC surface.
 - Run the full check suite plus the e2e tests, and fix anything that fails:
   ```bash
@@ -150,7 +148,11 @@ Before a release:
   (`prepublishOnly` runs lint + typecheck + test + build; the live e2e is the smoke test to run by hand before publishing.)
 - Inspect the publish tarball with `npm pack --dry-run` and eyeball the output: the version is right, `src/` (pi loads `pi.extensions: ./src/index.ts`), `dist/`, `README.md`, `CHANGELOG.md` and `LICENSE` are present, and nothing stray slipped past `.npmignore`. Read-only; it writes no tarball. `prepublishOnly` builds but never checks what actually ships.
 
-**Never publish.** The user runs `npm version` / `npm publish` and any tagging manually. Do not run those commands unless the user explicitly asks.
+**Publishing**:
+
+- Publishing to npm is automated via GitHub Actions (`.github/workflows/publish.yml`) using npm Trusted Publishing (OIDC).
+- Pushing a release tag `v*` (e.g. `git tag vYYYY.MM.DD-r<n> && git push origin vYYYY.MM.DD-r<n>`) whose version matches `package.json` triggers the publish workflow.
+- **Never run `npm publish` manually.** Pushing the release tag is the only publish trigger. Do not push, tag, or create branches unless the user explicitly asks.
 
 ## User Override
 

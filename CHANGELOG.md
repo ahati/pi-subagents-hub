@@ -9,6 +9,8 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+## [2026.10.22-r1] - 2026-10-22
+
 ### Fixed
 - **Clean shutdown releases parked main turn claim and shadow continuation inherits active model.** When quitting after a main turn parked, `session_shutdown` skipped clearing the PID claim if the park had already landed, causing subsequent `/continue` invocations in new or restarted processes to falsely reject with a live claim collision warning. The shutdown handler now always releases the PID claim for the shutting-down process, shadow continuation passes `model`, `thinkingLevel`, and `scopedModels` from the active command context, and already-complete turns notify clearly instead of failing or reporting misleading continuations.
 - **Main turn park lands active workflows at boundaries and preserves them through shutdown.** When `/pause` was armed during a running turn, `landPark` paused active agents but omitted active `workflowTasks`, causing running workflows to remain in `running` status and be excluded from the manifest rewrite. `landPark` now pauses active workflow tasks via `pauseWorkflowTask` before syncing the manifest, reports parked workflow counts in the notification, and `session_shutdown` lands any armed pause before clearing `workflowTasks`.
