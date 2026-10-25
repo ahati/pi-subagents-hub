@@ -9,6 +9,9 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Collapsed completion notifications preview JSON results as one compact line instead of a bare `{`.** A workflow or background agent whose result is an object gets pretty-printed with `JSON.stringify(…, null, 2)`, so the collapsed card's first-line preview showed only the opening brace. When the first preview line is a bare `{` or `[`, the card now collapses the whitespace into a single capped line instead; plain-text results, the expanded view and the model-facing notification text are unchanged.
+
 ## [2026.10.22-r1] - 2026-10-22
 
 ### Fixed

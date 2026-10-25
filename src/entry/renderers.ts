@@ -226,7 +226,13 @@ export function registerSubagentRenderers(pi: ExtensionAPI, isShowCost: () => bo
           const lines = d.resultPreview.split("\n").slice(0, 30);
           for (const l of lines) line += "\n" + theme.fg("dim", `  ${l}`);
         } else {
-          const preview = d.resultPreview.split("\n")[0]?.slice(0, 80) ?? "";
+          const first = d.resultPreview.split("\n")[0] ?? "";
+          // Pretty-printed JSON opens with a bare `{`/`[` line; a first-line
+          // preview would be just that brace, so collapse whitespace instead.
+          const preview =
+            first.trim() === "{" || first.trim() === "["
+              ? d.resultPreview.replace(/\s+/g, " ").trim().slice(0, 80)
+              : first.slice(0, 80);
           line += "\n  " + theme.fg("dim", `⎿  ${preview}`);
         }
 
