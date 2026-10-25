@@ -1,17 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { BUILTIN_TOOL_NAMES } from "../agent-types.js";
 import { getStatusNote } from "../status-note.js";
 import type { AgentConfig, AgentRecord, NotificationDetails } from "../types.js";
-import {
-  type AgentActivity,
-  type AgentDetails,
-  formatCost,
-  formatMs,
-  formatTokens,
-  formatTurns,
-  type Theme,
-} from "../ui/agent-widget.js";
+import { type AgentActivity, type AgentDetails, formatCost, formatMs, formatTokens, formatTurns, type Theme } from "../ui/agent-widget.js";
+import { resolveMarkdownTheme } from "../ui/viewer/viewer-types.js";
 import { renderWorkflowEntryCard } from "../ui/workflow-card.js";
 import {
   getLifetimeCost,
@@ -30,8 +23,25 @@ import { escapeXml } from "../xml.js";
 // ---- Shared helpers ----
 
 /** Tool execute return value for a text response. */
-export function textResult(msg: string, details?: AgentDetails) {
+export function textResult(msg: string, details?: AgentDetails | Record<string, unknown>) {
   return { content: [{ type: "text" as const, text: msg }], details: details as unknown as Record<string, unknown> };
+}
+
+/**
+ * Model-authored prose (an agent's report, a result body) as main-screen
+ * Markdown. `dim` recedes it under status chrome, as expanded results sit
+ * under their ✓ line. Construction only — a renderer that throws at render
+ * time falls back through the tool renderer's own error path.
+ */
+export function markdownText(text: string, theme: Theme, dim = false): Markdown | Text {
+  if (!text.trim()) return new Text("", 0, 0);
+  return new Markdown(
+    text,
+    0,
+    0,
+    resolveMarkdownTheme(theme),
+    dim ? { color: (t: string) => theme.fg("dim", t) } : undefined,
+  );
 }
 
 export function renderRunningAgentStatus(
@@ -197,7 +207,13 @@ export function registerSubagentRenderers(pi: ExtensionAPI, isShowCost: () => bo
       const d = message.details;
       if (!d) return undefined;
 
-      function renderOne(d: NotificationDetails): string {
+      interface NotificationPart {
+        pre: string;
+        result: string;
+        post: string;
+      }
+
+      function renderOne(d: NotificationDetails): NotificationPart {
         const isError = d.status === "error" || d.status === "stopped" || d.status === "aborted";
         const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
         const statusText = isError ? d.status
@@ -205,7 +221,7 @@ export function registerSubagentRenderers(pi: ExtensionAPI, isShowCost: () => bo
           : "completed";
 
         // Line 1: icon + agent description + status
-        let line = `${icon} ${theme.bold(d.description)} ${theme.fg("dim", statusText)}`;
+        let pre = `${icon} ${theme.bold(d.description)} ${theme.fg("dim", statusText)}`;
 
         // Line 2: stats
         const parts: string[] = [];
@@ -218,13 +234,13 @@ export function registerSubagentRenderers(pi: ExtensionAPI, isShowCost: () => bo
         }
         if (d.durationMs > 0) parts.push(formatMs(d.durationMs));
         if (parts.length) {
-          line += "\n  " + parts.map(p => theme.fg("dim", p)).join(" " + theme.fg("dim", "·") + " ");
+          pre += "\n  " + parts.map(p => theme.fg("dim", p)).join(" " + theme.fg("dim", "·") + " ");
         }
 
-        // Line 3: result preview (collapsed) or full (expanded)
+        // Line 3: result preview (collapsed) or full (expanded, as Markdown)
+        let result = "";
         if (expanded) {
-          const lines = d.resultPreview.split("\n").slice(0, 30);
-          for (const l of lines) line += "\n" + theme.fg("dim", `  ${l}`);
+          result = d.resultPreview;
         } else {
           const first = d.resultPreview.split("\n")[0] ?? "";
           // Pretty-printed JSON opens with a bare `{`/`[` line; a first-line
@@ -233,19 +249,23 @@ export function registerSubagentRenderers(pi: ExtensionAPI, isShowCost: () => bo
             first.trim() === "{" || first.trim() === "["
               ? d.resultPreview.replace(/\s+/g, " ").trim().slice(0, 80)
               : first.slice(0, 80);
-          line += "\n  " + theme.fg("dim", `⎿  ${preview}`);
+          pre += "\n  " + theme.fg("dim", `⎿  ${preview}`);
         }
 
         // Line 4: output file link (if present)
+        let post = "";
         if (d.outputFile) {
-          line += "\n  " + theme.fg("muted", `transcript: ${d.outputFile}`);
+          post = expanded
+            ? "  " + theme.fg("muted", `transcript: ${d.outputFile}`)
+            : "\n  " + theme.fg("muted", `transcript: ${d.outputFile}`);
         }
 
-        return line;
+        return { pre, result, post };
       }
 
       const all = [d, ...(d.others ?? [])];
-      const rendered = all.map(renderOne);
+      const parts = all.map(renderOne);
+      const entry = new Container();
       // A group of agents lands as one notification, and the number a user wants
       // from it is what the batch cost — not four figures to add up by hand.
       // Derived from the per-agent details rather than carried alongside them:
@@ -254,10 +274,15 @@ export function registerSubagentRenderers(pi: ExtensionAPI, isShowCost: () => bo
         const total = formatCost(all.reduce((sum, a) => sum + (a.totalCost ?? 0), 0));
         if (total) {
           const tokens = all.reduce((sum, a) => sum + a.totalTokens, 0);
-          rendered.unshift(theme.fg("dim", `${all.length} agents · ${formatTokens(tokens)} · ${total}`));
+          entry.addChild(new Text(theme.fg("dim", `${all.length} agents · ${formatTokens(tokens)} · ${total}`), 0, 0));
         }
       }
-      return new Text(rendered.join("\n"), 0, 0);
+      for (const part of parts) {
+        entry.addChild(new Text(part.pre, 0, 0));
+        if (part.result) entry.addChild(markdownText(part.result, theme, true));
+        if (part.post) entry.addChild(new Text(part.post, 0, 0));
+      }
+      return entry;
     }
   );
 

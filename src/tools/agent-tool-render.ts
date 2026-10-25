@@ -1,6 +1,6 @@
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { hasAgentBadge, renderAgentName } from "../agent-color.js";
-import { BACKGROUND_HINT_DELAY_MS, renderRunningAgentStatus } from "../entry/renderers.js";
+import { BACKGROUND_HINT_DELAY_MS, markdownText, renderRunningAgentStatus } from "../entry/renderers.js";
 import {
   type AgentDetails,
   fgPreservingNestedStyles,
@@ -81,15 +81,10 @@ export function renderAgentToolResult(
 
     if (options.expanded) {
       const resultText = result.content[0]?.type === "text" ? result.content[0].text ?? "" : "";
-      if (resultText) {
-        const lines = resultText.split("\n").slice(0, 50);
-        for (const l of lines) {
-          line += "\n" + theme.fg("dim", `  ${l}`);
-        }
-        if (resultText.split("\n").length > 50) {
-          line += "\n" + theme.fg("muted", "  ... (use get_subagent_result with verbose for full output)");
-        }
-      }
+      const entry = new Container();
+      entry.addChild(new Text(line, 0, 0));
+      if (resultText.trim()) entry.addChild(markdownText(resultText, theme, true));
+      return entry;
     } else {
       const doneText = isSteered ? "Wrapped up (turn limit)" : "Done";
       line += "\n" + theme.fg("dim", `  ⎿  ${doneText}`);
