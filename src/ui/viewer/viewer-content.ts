@@ -205,11 +205,13 @@ function toolComponent(ctx: TranscriptContext, call: { name?: string; toolName?:
   const callId = String(call.id ?? call.toolUseId ?? `call-${++fallbackCallId}`);
   // The call has, by definition of being in the transcript, started and its
   // arguments are complete — what pi's live context would report mid-stream.
-  // `ui` is the viewer's TUI with requestRender shadowed: a renderer calling
-  // `ctx.invalidate()` must also drop the viewer's rendered-lines cache, not
-  // just schedule a frame.
-  const toolUi = Object.create(ctx.tui) as TUI;
-  toolUi.requestRender = () => ctx.invalidate();
+  // `ui` must NOT prototype from pi's proxied extension TUI (`Object.create`
+  // here once made pi's current-TUI resolution land back on this shadow, and
+  // a renderer's ctx.invalidate() recursed requestRender until the stack
+  // blew). These components only ever call `ui.requestRender`, so a
+  // standalone object routed at the viewer's invalidation is enough — same
+  // shape as the pre-component fake context, which was re-entrancy-safe.
+  const toolUi = { requestRender: () => ctx.invalidate() } as unknown as TUI;
   const comp = new ToolExecutionComponent(
     name,
     callId,
