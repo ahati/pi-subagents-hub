@@ -10,6 +10,7 @@ check the entries below for behaviour changes.
 ## [Unreleased]
 
 ### Fixed
+- **The run page's agent list reaches its bottom when a run has more agents than fit.** The hub's **W** pane windowed its agent list in *entries* while `padLines` clips *rows*, and a live agent spends two rows — its `↳` tail is never empty while running — so a long list drew the top and silently cut the bottom, cursor row included, with no key or wheel way to bring it in. The pane now windows in whole rendered rows (shared `agentEntryWindow` in `workflow-view.ts`), always keeps the cursor's rows visible, follows the tail while the cursor sits on a phase instead of pinning to the first agent, and caps the phase block at a third of the body so agents are no longer starved to a row or two. `PgUp`/`PgDn` stride the item cursor and `Home`/`End` jump to the ends; the mouse wheel keeps scrolling the roster pinned left of the run page, as before.
 - **Collapsed completion notifications preview JSON results as one compact line instead of a bare `{`.** A workflow or background agent whose result is an object gets pretty-printed with `JSON.stringify(…, null, 2)`, so the collapsed card's first-line preview showed only the opening brace. When the first preview line is a bare `{` or `[`, the card now collapses the whitespace into a single capped line instead; plain-text results, the expanded view and the model-facing notification text are unchanged.
 
 ## [2026.10.22-r1] - 2026-10-22

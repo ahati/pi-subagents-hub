@@ -39,6 +39,7 @@ import {
 import {
   type AgentHubInputHost,
   dispatchHubInput,
+  moveRunItem,
   pageUnhandledKey,
   popPage,
 } from "./hub/hub-input.js";
@@ -302,6 +303,12 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
       return;
     }
     const steps = Math.max(1, Math.round(Math.abs(delta)));
+    // The run page's list is the phases+agents walk, not the roster behind it:
+    // wheeling there moves the item cursor, which is what drags the panes.
+    if (this.page === "W") {
+      moveRunItem(this, Math.sign(delta) * steps);
+      return;
+    }
     const items = this.entries();
     if (items.length > 0) {
       this.selected = Math.min(items.length - 1, Math.max(0, this.selected + Math.sign(delta) * steps));

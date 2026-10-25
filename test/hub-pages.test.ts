@@ -764,7 +764,7 @@ describe("the footer band", () => {
     h.press("\r"); // W
     const { left, right } = slots(bandOf(h.frame()));
     expect(left).toBe("1/2 agents · phase 1 of 1");
-    expect(right).toBe("↑↓ item · ⏎ agent · l run log · s stop run · f popup · Esc roster");
+    expect(right).toBe("↑↓ item · PgUp/PgDn item · ⏎ agent · l run log · s stop run · f popup · Esc roster");
   });
 });
 

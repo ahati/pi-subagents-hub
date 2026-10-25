@@ -596,11 +596,11 @@ Send a steering message to a running agent. The message interrupts after the cur
 
 `/agents → Workflows` (shown only when [workflows](#persistent-settings) are on) opens the **agent hub** on the selected run's page (**W**) — the same window the roster opens, focused on that run. The inspector window that used to draw this run is retired: one window, one page model, one footer grammar. Every path that opened it lands here — `/agents → Workflows`, `Enter` on a `workflow` row in the fleet list, and the SubagentWorkflow tool's `open` — so the same run cannot look like two different surfaces. With more than one run in the session it asks which, newest first; that picker is a `select`, not a window.
 
-Page **W** puts the run's header block (identity, counters, the current phase) over its phases and its `RUNNING WORKFLOW AGENTS` section — a running agent carries its live turn count, token total and last output line there; `Enter` descends into the run agent the item cursor addresses (**WA**), whose right pane is that agent's full conversation — the same viewer the roster's conversation pane embeds. `Esc` walks back one level. The footer names every key the page carries:
+Page **W** puts the run's header block (identity, counters, the current phase) over its phases and its `RUNNING WORKFLOW AGENTS` section — a running agent carries its live turn count, token total and last output line there; the agent list windows in whole rows (a live agent's `↳` tail costs a line), keeps the cursor's row visible, and follows the tail while the cursor sits on a phase so late-scheduled agents scroll in as the run grows; `Enter` descends into the run agent the item cursor addresses (**WA**), whose right pane is that agent's full conversation — the same viewer the roster's conversation pane embeds. `Esc` walks back one level. The footer names every key the page carries:
 
 | Page | Keys |
 |------|------|
-| **W** | `↑↓` moves the item cursor across phases and agents, `⏎` opens the agent, `l` the run log, `p` pauses/resumes the run, `s` stops it, `Esc` returns to the roster |
+| **W** | `↑↓` moves the item cursor across phases and agents, `PgUp/PgDn` strides it and `Home`/`End` jump to the ends, `⏎` opens the agent, `l` the run log, `p` pauses/resumes the run, `s` stops it, `Esc` returns to the roster |
 | **WA** | `↑↓` switches agents in the left list, `PgUp/PgDn` and `j` scroll the conversation, `o` expands a tool-call, `l` opens the agent's log, `p` pauses/resumes that agent, `Enter` steers, `x` stops it, `s` skips it, `r` retries it, `c` copies its settled result, `Esc` goes back to the run |
 
 The run controls are the retired inspector's, preserved on the pages that own their subjects:

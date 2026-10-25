@@ -217,6 +217,64 @@ export function phaseListRows(options: {
 }
 
 /**
+ * The agent list's visible slice, windowed in **rendered rows** rather than
+ * entries: a live agent spends two lines (its `↳` tail), so an entry count
+ * window overflows the pane and `padLines` silently cuts the list's bottom —
+ * the cursor row with it. The slice here is derived from each entry's row
+ * cost, keeps the selection's rows fully visible, and follows the tail when
+ * no agent is under the cursor (the phase rows), so agents a run schedules
+ * late scroll in as they appear.
+ */
+export function agentEntryWindow(options: {
+  entries: readonly WorkflowAgentEntry[];
+  /** Rendered lines an entry spends — the wide pane's live tail makes two. */
+  rowsOf(entry: WorkflowAgentEntry, index: number): number;
+  /** The entry the cursor sits on; undefined follows the tail. */
+  selection: number | undefined;
+  capacity: number;
+}): { start: number; end: number } {
+  const { entries, rowsOf } = options;
+  const capacity = Math.max(1, options.capacity);
+  if (entries.length === 0) return { start: 0, end: 0 };
+  const rows = entries.map(rowsOf);
+  const total = rows.reduce((sum, n) => sum + n, 0);
+  if (total <= capacity) return { start: 0, end: entries.length };
+  /** Rows above each entry's head line. */
+  const head: number[] = [];
+  let above = 0;
+  for (const n of rows) {
+    head.push(above);
+    above += n;
+  }
+  let startRow: number;
+  const selection = options.selection;
+  if (selection === undefined || selection >= entries.length) {
+    startRow = total - capacity;
+  } else {
+    // Center the selection's own rows — `windowRange`'s rule, one level down —
+    // clamped so the head line always survives even a one-row pane.
+    const selHead = head[selection];
+    startRow = Math.max(0, Math.min(
+      selHead - Math.floor((capacity - rows[selection]) / 2),
+      total - capacity,
+      selHead,
+    ));
+  }
+  // Whole entries only: skip the one straddling the window's top, cut before
+  // the one that would straddle its bottom. A head at or after `startRow`
+  // never splits, and the selection's head is past the top by the clamp.
+  let start = head.findIndex(h => h >= startRow);
+  if (start < 0) start = entries.length - 1;
+  let end = start;
+  let used = 0;
+  while (end < entries.length && used + rows[end] <= capacity) {
+    used += rows[end];
+    end++;
+  }
+  return { start, end };
+}
+
+/**
  * Which of the per-agent actions the selected row can currently take.
  *
  * The window for both is the one in which the agent's `agent()` call is still

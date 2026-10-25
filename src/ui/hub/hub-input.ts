@@ -148,6 +148,13 @@ export function dispatchHubInput(host: AgentHubInputHost, data: string): void {
   if (host.page === "W") {
     if (matchesKey(data, "down")) { moveRunItem(host, 1); return; }
     if (matchesKey(data, "up")) { moveRunItem(host, -1); return; }
+    // A page is a fixed stride of items, not a pane height: the item list is
+    // the flattened phases+agents walk, and clamping at both ends is all the
+    // jump needs.
+    if (matchesKey(data, "pageDown")) { moveRunItem(host, RUN_ITEM_PAGE_STEP); return; }
+    if (matchesKey(data, "pageUp")) { moveRunItem(host, -RUN_ITEM_PAGE_STEP); return; }
+    if (matchesKey(data, "home")) { moveRunItem(host, -Number.MAX_SAFE_INTEGER); return; }
+    if (matchesKey(data, "end")) { moveRunItem(host, Number.MAX_SAFE_INTEGER); return; }
     if (matchesKey(data, "enter")) { enterPage(host, host.entries()); return; }
     if (matchesKey(data, "l")) { pushLogPage(host); return; }
     if (matchesKey(data, "s")) { stopRun(host); return; }
@@ -335,7 +342,7 @@ export function moveRunSelection(host: AgentHubInputHost, delta: 1 | -1): void {
   host.requestRender();
 }
 
-export function moveRunItem(host: AgentHubInputHost, delta: 1 | -1): void {
+export function moveRunItem(host: AgentHubInputHost, delta: number): void {
   const groups = host.pageGroups();
   const entries = host.runAgents();
   const length = groups.length + entries.length;
@@ -347,6 +354,9 @@ export function moveRunItem(host: AgentHubInputHost, delta: 1 | -1): void {
   host.stopArmed = false;
   host.requestRender();
 }
+
+/** How far PgUp/PgDn stride the run page's item cursor, in list items. */
+const RUN_ITEM_PAGE_STEP = 10;
 
 export function stopRun(host: AgentHubInputHost): void {
   const run = host.page === "W" || host.page === "L" ? host.currentRun() : host.entries()[host.selected]?.kind === "workflow" ? (host.entries()[host.selected] as { workflow: FleetWorkflow }).workflow : undefined;

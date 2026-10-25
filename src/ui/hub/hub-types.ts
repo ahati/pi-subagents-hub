@@ -64,7 +64,7 @@ export const PAGE_KEYS: Record<HubPage, PageFooterKeys> = {
     esc: "close",
   },
   SL: { actions: ["x stop"], hints: ["↑↓ scroll", "c copy tail", "p pause agent"], esc: "back" },
-  W: { actions: [], hints: ["↑↓ item", "⏎ agent", "l run log", "s stop run"], esc: "roster" },
+  W: { actions: [], hints: ["↑↓ item", "PgUp/PgDn item", "⏎ agent", "l run log", "s stop run"], esc: "roster" },
   WA: {
     actions: ["Enter steer", "x stop", "m md"],
     hints: ["PgUp/PgDn", "j scroll", "o expand", "l log", "p pause", "c copy"],

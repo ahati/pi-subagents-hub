@@ -22,6 +22,7 @@ import type { FleetWorkflow } from "../fleet-list.js";
 import { type WindowRow, windowRange } from "../window-frame.js";
 import { clampLine, type WorkflowCardLine } from "../workflow-card.js";
 import {
+  agentEntryWindow,
   agentRow,
   phaseListRows,
   UNICODE_DIALOG_GLYPHS,
@@ -170,7 +171,10 @@ export function buildRunPaneLines(
   const item = host.clampRunItemIndex(groups, entries);
   const agentSel = item >= groups.length ? item - groups.length : undefined;
   const lines: PaneRow[] = [clampLine([{ text: "PHASES", color: "muted", bold: true }], width)];
-  const phaseCapacity = Math.max(0, capacity - 4);
+  // The phase block gets what it needs, capped at a third of the body: phases
+  // are the plan, agents are the run's bulk, and a long agent list starved to
+  // `capacity - 4` rows is the whole pane lost to four phase rows.
+  const phaseCapacity = groups.length > 0 ? Math.min(groups.length, Math.max(1, Math.floor(capacity / 3))) : 0;
   lines.push(
     ...phaseListRows({
       groups,
@@ -183,8 +187,15 @@ export function buildRunPaneLines(
   );
   lines.push([]);
   lines.push(clampLine([{ text: RUN_AGENTS_LABEL, color: "muted", bold: true }], width));
-  const selection = agentSel ?? host.clampRunAgentIndex();
-  const slice = windowRange(selection, entries.length, Math.max(1, capacity - lines.length));
+  // Live facts drive both the row cost (a live `↳` tail doubles an entry) and
+  // the drawing, so they are read once per entry, up front.
+  const live = entries.map(entry => runAgentLive(host, entry, source.task.status));
+  const slice = agentEntryWindow({
+    entries,
+    rowsOf: (_, i) => (live[i]?.tail ? 2 : 1),
+    selection: agentSel,
+    capacity: Math.max(1, capacity - lines.length),
+  });
   if (entries.length === 0) lines.push(clampLine([{ text: `   ${WORKFLOW_NO_AGENTS}`, color: "dim" }], width));
   for (let i = slice.start; i < slice.end; i++) {
     lines.push(
@@ -197,7 +208,7 @@ export function buildRunPaneLines(
         runStatus: source.task.status,
         spinnerFrame: 0,
         now: Date.now(),
-        live: runAgentLive(host, entries[i], source.task.status),
+        live: live[i],
       }),
     );
   }
