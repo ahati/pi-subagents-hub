@@ -111,10 +111,11 @@ export function getConversationOverlayOptions(tui: Pick<TUI, "mode">): OverlayOp
 }
 
 /**
- * Tool renderers, as merged onto a definition: pi's main window does exactly
- * this merge (`withBuiltInRenderers(toolName, session.getToolDefinition(name))`).
+ * Tool renderers, as merged onto a definition: the loose shape the viewer passes
+ * to `ToolExecutionComponent` (pi's own adds `renderShell`).
  */
 export interface ToolRenderers {
+  renderShell?: unknown;
   renderCall?: (args: any, theme: any, context: any) => unknown;
   renderResult?: (result: any, options: any, theme: any, context: any) => unknown;
 }

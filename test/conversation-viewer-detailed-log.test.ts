@@ -213,6 +213,48 @@ describe("tool calls render through pi's ToolExecutionComponent", () => {
   });
 });
 
+describe("renderer chain (registerToolRenderer extensions, e.g. pi-ui-enhancement)", () => {
+  const chainDef = {
+    renderCall: () => ({ render: () => ["CHAIN CALL"] }),
+    renderResult: () => ({ render: () => ["CHAIN RESULT"] }),
+  };
+
+  function chainSession(resolver: ((name: string, next: () => unknown) => unknown) | undefined) {
+    const session = mockSession([{ role: "assistant", content: [CALL] }, OK_RESULT],
+      name => (name === "bash" ? { renderCall: () => ({ render: () => ["DEF CALL"] }) } : undefined));
+    (session as any).extensionRunner = resolver
+      ? { resolveToolRenderers: (name: string, next: () => unknown) => resolver(name, next) }
+      : {};
+    return session;
+  }
+
+  it("resolves through the session's extension runner chain before the definition", () => {
+    const viewer = new ConversationViewer(
+      mockTui(), chainSession((_name, next) => next() ? chainDef : undefined),
+      mockRecord(), undefined, theme as any, vi.fn(),
+    );
+    const out = plain(viewer.render(120));
+    expect(out).toContain("CHAIN CALL");
+    expect(out).toContain("CHAIN RESULT");
+    expect(out).not.toContain("DEF CALL");
+  });
+
+  it("falls back to the definition merge when the chain passes (next())", () => {
+    const viewer = new ConversationViewer(
+      mockTui(), chainSession((_name, next) => next()),
+      mockRecord(), undefined, theme as any, vi.fn(),
+    );
+    expect(plain(viewer.render(120))).toContain("DEF CALL");
+  });
+
+  it("falls back to the definition merge when the session has no runner", () => {
+    const session = chainSession(undefined);
+    delete (session as any).extensionRunner;
+    const viewer = new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
+    expect(plain(viewer.render(120))).toContain("DEF CALL");
+  });
+});
+
 describe("expanded tool output (o / ctrl+o)", () => {
   function expandViewer() {
     // Without renderers the component dumps full output (pi's main window
