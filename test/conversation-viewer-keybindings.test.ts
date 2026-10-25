@@ -1,9 +1,13 @@
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRecord } from "../src/types.js";
 import { ConversationViewer } from "../src/ui/conversation-viewer.js";
 import type { ViewerKeybindings } from "../src/ui/viewer-keys.js";
 import { createViewerKeys } from "../src/ui/viewer-keys.js";
+
+// The transcript components read pi's global theme; only the TUI normally sets it up.
+initTheme(undefined, false);
 
 const CTRL_P = "\x10";
 const CTRL_N = "\x0e";

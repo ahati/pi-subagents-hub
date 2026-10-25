@@ -16,7 +16,7 @@
 import { isKeyRelease, Key, matchesKey, type ScrollViewScrollbar, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { hasAgentBadge, renderAgentRecordName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
-import type { AgentRecord, UIStyle, ViewerMarkdownMode } from "../types.js";
+import type { AgentRecord, UIStyle } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import type { WorkflowRunControls } from "./agent-hub.js";
 import { openAgentHub } from "./agent-hub.js";
@@ -149,18 +149,6 @@ export class FleetList {
      * `showCost` setting.
      */
     private showCost: () => boolean = () => false,
-    /**
-     * The user's `viewerMarkdown` setting, for a conversation overlay opened
-     * from here. Read live rather than captured, because the viewer's `m` key
-     * changes it while the overlay is up. Omitted → the viewer's own default.
-     */
-    private viewerMarkdown?: () => ViewerMarkdownMode,
-    /**
-     * Persist a mode chosen with `m` in that overlay, so the key means the same
-     * thing here as it does from `/agents` — one setting, not one per entry
-     * point. Omitted → `m` still cycles, viewer-locally.
-     */
-    private onViewerMarkdown?: (mode: ViewerMarkdownMode) => void,
     private scrollbarMode: () => ScrollViewScrollbar = () => "auto",
     /**
      * The viewer's `b` for this row's run, supplied by the extension: only it
@@ -542,8 +530,6 @@ export class FleetList {
         manager: this.manager,
         agentActivity: this.agentActivity,
         showCost: this.showCost(),
-        viewerMarkdown: this.viewerMarkdown,
-        onViewerMarkdown: this.onViewerMarkdown,
         workflows: this.workflowSource,
         workflowRun: id => this.workflowRunSource?.(id),
         stopWorkflow: id => this.stopWorkflowRun?.(id),

@@ -10,11 +10,12 @@
  * ~62 Hz). Everything above the viewport is built and thrown away, and
  * `handleInput` builds it a second time on every scroll key just to count lines.
  *
- * Both markdown modes are measured. `assistant` is the default and sends
- * assistant text through pi's Markdown parser; `off` is the raw wrap path. The
- * pair is the cost of #259, and the cap it introduced (RESULT_MAX_CHARS) is what
- * keeps a single large tool result from dominating the whole frame.
- *
+ * The transcript is rendered through pi's main-screen components: assistant
+ * text goes through pi's Markdown parser inside `AssistantMessageComponent`,
+ * tool calls through `ToolExecutionComponent`. The components keep their own
+ * internal state, so a frame's cost is the component tree re-render, not a
+ * re-parse — that identity is what the cold-cache describe below pins.
+ * 
  * Cold vs warm is the other axis worth knowing: the Markdown cache is a WeakMap
  * keyed by the message object, so the first frame parses and later frames reuse.
  * A regression that breaks cache identity would leave "warm" looking like
@@ -26,20 +27,10 @@ import { makeSession, mountViewer } from "../helpers/perf-fixtures.js";
 
 const SIZES = [50, 500, 5000];
 
-describe("ConversationViewer.render — markdown: assistant (default)", () => {
+describe("ConversationViewer.render — components (assistant markdown)", () => {
   for (const n of SIZES) {
     const viewer = mountViewer(ConversationViewer, makeSession(n));
     viewer.render(120); // prime: first frame parses, the measured ones reuse
-    bench(`${n} messages`, () => {
-      viewer.render(120);
-    });
-  }
-});
-
-describe("ConversationViewer.render — markdown: off (raw wrap)", () => {
-  for (const n of SIZES) {
-    const viewer = mountViewer(ConversationViewer, makeSession(n), undefined, () => "off");
-    viewer.render(120);
     bench(`${n} messages`, () => {
       viewer.render(120);
     });

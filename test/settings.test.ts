@@ -160,15 +160,6 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
   });
 
-  it("round-trips viewerMarkdown; keeps valid values, drops invalid", () => {
-    saveSettings({ viewerMarkdown: "off" }, projectDir);
-    expect(loadSettings(projectDir)).toEqual({ viewerMarkdown: "off" });
-    saveSettings({ viewerMarkdown: "all" }, projectDir);
-    expect(loadSettings(projectDir)).toEqual({ viewerMarkdown: "all" });
-    writeProject({ viewerMarkdown: "markdown" } as any);
-    expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
-  });
-
   it("round-trips uiStyle; keeps valid values, drops invalid", () => {
     saveSettings({ uiStyle: "claude" }, projectDir);
     expect(loadSettings(projectDir)).toEqual({ uiStyle: "claude" });
@@ -744,13 +735,6 @@ describe("settings persistence", () => {
       expect(appliers.setWidgetMode).toHaveBeenCalledWith("off");
       applySettings({}, appliers);
       expect(appliers.setWidgetMode).toHaveBeenCalledTimes(1); // absence is "use default"
-    });
-
-    it("applies viewerMarkdown; skips it when absent", () => {
-      applySettings({ viewerMarkdown: "all" }, appliers);
-      expect(appliers.setViewerMarkdown).toHaveBeenCalledWith("all");
-      applySettings({}, appliers);
-      expect(appliers.setViewerMarkdown).toHaveBeenCalledTimes(1); // absence is "use default"
     });
 
     it("applies uiStyle; skips it when absent", () => {

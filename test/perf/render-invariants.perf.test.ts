@@ -57,9 +57,9 @@ beforeEach(() => {
 
 describe("ConversationViewer — cost stays linear in transcript length", () => {
   /** Leaf calls one rebuild makes over a transcript of `n` messages. */
-  function wrapsFor(n: number, mode: string): number {
+  function wrapsFor(n: number): number {
     const session = makeSession(n);
-    const viewer = mountViewer(ConversationViewer, session, undefined, () => mode);
+    const viewer = mountViewer(ConversationViewer, session);
     viewer.render(120); // prime, so caches are warm and only steady state counts
     counts.wrap = 0;
     counts.markdownRender = 0;
@@ -70,32 +70,26 @@ describe("ConversationViewer — cost stays linear in transcript length", () => 
     return counts.wrap + counts.markdownRender;
   }
 
-  // The viewer rebuilds every line of the transcript on every frame, so the work
-  // is expected to grow with it. What must not happen is growing FASTER than it:
-  // ten times the messages, at most ~ten times the work. A quadratic here is
-  // invisible on a short conversation and locks the TUI on a long one.
-  it("does ~10x the work for 10x the messages (raw wrap path)", () => {
-    const small = wrapsFor(30, "off");
-    const large = wrapsFor(300, "off");
+  // The viewer rebuilds the component tree on every session event and renders
+  // it to lines, so the work is expected to grow with the transcript. What must
+  // not happen is growing FASTER than it: ten times the messages, at most ~ten
+  // times the work. A quadratic here is invisible on a short conversation and
+  // locks the TUI on a long one.
+  it("does ~10x the work for 10x the messages", () => {
+    const small = wrapsFor(30);
+    const large = wrapsFor(300);
 
     expect(small).toBeGreaterThan(0);
     expect(large / small).toBeLessThanOrEqual(11);
   });
 
-  it("does ~10x the work for 10x the messages (markdown path)", () => {
-    const small = wrapsFor(30, "assistant");
-    const large = wrapsFor(300, "assistant");
-
-    expect(small).toBeGreaterThan(0);
-    expect(large / small).toBeLessThanOrEqual(11);
-  });
-
-  // #259's WeakMap is keyed by the message object. If a refactor ever rebuilds
-  // messages, or keys the cache on something that changes per frame, every frame
-  // re-parses the whole transcript as Markdown — a cost this suite measured at
-  // roughly 10x the warm path. Nothing else in the suite would notice.
-  it("re-renders without re-parsing: the markdown cache survives a frame", () => {
-    const viewer = mountViewer(ConversationViewer, makeSession(60), undefined, () => "assistant");
+  // The component-per-message WeakMaps are keyed by the message object. If a
+  // refactor ever rebuilds messages, or keys the cache on something that changes
+  // per frame, every frame re-parses the whole transcript as Markdown — a cost
+  // this suite measured at roughly 10x the warm path. Nothing else in the suite
+  // would notice.
+  it("re-renders without re-parsing: the component cache survives a frame", () => {
+    const viewer = mountViewer(ConversationViewer, makeSession(60));
     viewer.render(120);
     const afterFirst = counts.markdownNew;
     expect(afterFirst).toBeGreaterThan(0);

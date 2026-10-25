@@ -27,6 +27,11 @@
  *    reports the wrong arity and silently measures the wrong configuration.
  */
 
+import { initTheme } from "@earendil-works/pi-coding-agent";
+
+// The transcript components read pi's global theme; only the TUI normally sets it up.
+initTheme(undefined, false);
+
 /** Identity theme: measure the render, not the ANSI. */
 export const perfTheme = {
   fg: (_color: string, text: string) => text,
@@ -263,7 +268,6 @@ export function mountViewer(
   Viewer: any,
   session: any,
   record: unknown = makeRecord(0),
-  markdownMode?: () => string,
 ) {
   const viewer = new Viewer(
     perfTui(120, 40),
@@ -276,7 +280,6 @@ export function mountViewer(
     undefined,
     undefined,
     false,
-    markdownMode,
   );
   return viewer;
 }

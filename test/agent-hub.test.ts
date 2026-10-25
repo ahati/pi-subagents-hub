@@ -1,9 +1,13 @@
 import * as piHost from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import type { AgentRecord } from "../src/types.js";
 import { AgentHub, type AgentHubDeps, type HubUICtx, openAgentHub } from "../src/ui/agent-hub.js";
 import { type AgentActivity } from "../src/ui/agent-widget.js";
+
+// The transcript components read pi's global theme; only the TUI normally sets it up.
+initTheme(undefined, false);
 
 // ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
 const ESC = "\x1b";

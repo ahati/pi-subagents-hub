@@ -781,8 +781,6 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
       this.keybindings as ViewerKeybindings | undefined,
       message => this.deps.manager.steer(record.id, message),
       this.deps.showCost,
-      this.deps.viewerMarkdown,
-      this.deps.onViewerMarkdown,
       this.deps.scrollbarMode?.() ?? "auto",
       this.deps.backgroundAction?.(record, message => this.deps.notify?.(message, "info")),
       {

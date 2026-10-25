@@ -1,6 +1,10 @@
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRecord } from "../src/types.js";
 import { ConversationViewer } from "../src/ui/conversation-viewer.js";
+
+// The transcript components read pi's global theme; only the TUI normally sets it up.
+initTheme(undefined, false);
 
 /** Visible text of a rendered frame: ANSI stripped. */
 function plain(lines: string[]): string {
@@ -23,6 +27,7 @@ function mockSession(messages: any[], getToolDefinition?: (name: string) => unkn
     /** Fire the session event a real pi session fires for a transcript change. */
     emit: (event: any = { type: "message_update" }) => listener?.(event),
     messages,
+    state: {},
     getToolDefinition,
   } as any;
 }
@@ -40,176 +45,151 @@ function mockRecord(over: Partial<AgentRecord> = {}): AgentRecord {
   } as AgentRecord;
 }
 
-function viewerFor(messages: any[]): ConversationViewer {
-  return new ConversationViewer(
-    mockTui(),
-    mockSession(messages),
-    mockRecord(),
-    undefined,
-    theme as any,
-    vi.fn(),
-  );
-}
-
-function render(messages: any[], over: Partial<AgentRecord> = {}, viewerMarkdown?: () => any): string {
+function render(messages: any[], over: Partial<AgentRecord> = {}, getToolDefinition?: (name: string) => unknown, activity?: any): string {
   const viewer = new ConversationViewer(
     mockTui(),
-    mockSession(messages),
+    mockSession(messages, getToolDefinition),
     mockRecord(over),
-    undefined,
+    activity,
     theme as any,
     vi.fn(),
-    undefined, // onStop
-    undefined, // keybindings
-    undefined, // onSteer
-    undefined, // showCost
-    viewerMarkdown,
   );
   return plain(viewer.render(120));
 }
 
-describe("rich tool renderers (main-window quality)", () => {
-  const richDef = {
-    renderCall: (args: any) => ({ render: (_w: number) => [`RICH CALL ${JSON.stringify(args)}`] }),
-    renderResult: (result: any) => ({ render: (_w: number) => [`RICH RESULT err=${result.isError}`] }),
-  };
+const CALL = { type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls -la" } };
+const OK_RESULT = {
+  role: "toolResult",
+  toolCallId: "t1",
+  toolName: "bash",
+  isError: false,
+  content: [{ type: "text", text: Array.from({ length: 14 }, (_, i) => `row-${i + 1}`).join("\n") }],
+};
+const ERR_RESULT = {
+  role: "toolResult",
+  toolCallId: "t1",
+  toolName: "bash",
+  isError: true,
+  content: [{ type: "text", text: "boom: no such file" }],
+};
 
+describe("tool calls render through pi's ToolExecutionComponent", () => {
   it("uses the session definition's renderCall for the call row", () => {
-    const session = mockSession([{ role: "assistant", content: [{ type: "toolCall", id: "t1", name: "edit", arguments: { path: "x.ts" } }] }],
-      name => (name === "edit" ? richDef : undefined));
-    const viewer = new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
-    const out = plain(viewer.render(120));
-    expect(out).toContain('RICH CALL {"path":"x.ts"}');
-    expect(out).not.toContain("⏺ edit");
+    const richDef = {
+      renderCall: (args: any) => ({ render: (_w: number) => [`RICH CALL ${JSON.stringify(args)}`] }),
+      renderResult: (_result: any, _opts: any, _theme: any, ctx: any) => ({
+        render: (_w: number) => [`RICH RESULT err=${ctx.isError}`],
+      }),
+    };
+    const out = render(
+      [{ role: "assistant", content: [CALL] }, OK_RESULT],
+      {},
+      name => (name === "bash" ? richDef : undefined),
+    );
+    expect(out).toContain('RICH CALL {"command":"ls -la"}');
+    expect(out).toContain("RICH RESULT err=false");
   });
 
-  it("uses renderResult for the outcome row, with isError", () => {
-    const session = mockSession([
-      { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "edit", arguments: {} }] },
-      { role: "toolResult", toolCallId: "t1", toolName: "edit", isError: true, content: [{ type: "text", text: "boom" }] },
-    ], name => (name === "edit" ? richDef : undefined));
-    const viewer = new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
-    const out = plain(viewer.render(120));
+  it("hands the error flag to the result renderer through the context", () => {
+    const richDef = {
+      renderCall: () => ({ render: () => ["RICH CALL"] }),
+      renderResult: (_result: any, _opts: any, _theme: any, ctx: any) => ({
+        render: () => [`RICH RESULT err=${ctx.isError}`],
+      }),
+    };
+    const out = render(
+      [{ role: "assistant", content: [CALL] }, ERR_RESULT],
+      {},
+      () => richDef,
+    );
     expect(out).toContain("RICH RESULT err=true");
-    expect(out).not.toContain("✗ error");
   });
 
-  it("falls back to text when a rich renderer throws", () => {
+  it("falls back to the component's own call format when a rich renderer throws", () => {
     const throwing = {
       renderCall: () => {
         throw new Error("renderer bug");
       },
     };
-    const session = mockSession([{ role: "assistant", content: [{ type: "toolCall", id: "t1", name: "edit", arguments: { path: "x.ts" } }] }],
-      () => throwing);
-    const viewer = new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
-    const out = plain(viewer.render(120));
-    expect(out).toContain("⏺ edit(x.ts)");
+    const out = render(
+      [{ role: "assistant", content: [CALL] }],
+      {},
+      () => throwing,
+    );
+    expect(out).toContain("bash");
+    expect(out).toContain("ls -la");
+    expect(out).not.toContain("renderer bug");
   });
 
-  it("merges: definition hook wins, missing hook comes from nowhere and text fills in", () => {
-    const half = { renderResult: (result: any) => ({ render: () => [`HALF err=${result.isError}`] }) };
-    const session = mockSession([
-      { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "edit", arguments: { path: "x.ts" } }] },
-      { role: "toolResult", toolCallId: "t1", toolName: "edit", isError: false, content: [{ type: "text", text: "ok" }] },
-    ], () => half);
-    const viewer = new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
-    const out = plain(viewer.render(120));
-    expect(out).toContain("⏺ edit(x.ts)"); // no renderCall on the definition
-    expect(out).toContain("HALF err=false");
-  });
-
-  it("re-invokes renderCall every frame with the same shared component (async-preview pattern)", async () => {
-    // Mirrors pi's edit renderer: state-owned component, children rebuilt per
-    // frame, and a preview that lands ASYNC via ctx.invalidate() — the next
-    // invocation must see it and render the body.
-    let component: any;
-    const invocations: number[] = [];
-    const editLike = {
-      renderCall: (_args: any, _theme: any, ctx: any) => {
-        invocations.push(Date.now());
-        component ??= { children: ["header"], preview: undefined as string[] | undefined };
-        ctx.state.callComponent = component;
-        // Simulate the async diff landing after the first frame.
-        if (invocations.length === 1) {
-          Promise.resolve().then(() => {
-            component.preview = ["+ diff line"];
-            ctx.invalidate();
-          });
-        }
-        const lines = ["header", ...(component.preview ?? [])];
-        return { render: () => lines };
-      },
+  it("merges: a definition's renderResult wins, its missing renderCall falls back", () => {
+    const half = {
+      renderResult: () => ({ render: () => ["HALF RESULT"] }),
     };
-    const session = mockSession([{ role: "assistant", content: [{ type: "toolCall", id: "t1", name: "edit", arguments: { path: "x.ts" } }] }],
-      () => editLike);
-    const viewer = new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
-    const first = plain(viewer.render(120));
-    expect(first).not.toContain("+ diff line");
-    await 0; // let the simulated async preview land
-    const second = plain(viewer.render(120));
-    expect(second).toContain("+ diff line");
-    expect(invocations.length).toBe(2); // re-invoked, not cached out
-    void component;
+    const out = render(
+      [{ role: "assistant", content: [CALL] }, OK_RESULT],
+      {},
+      () => half,
+    );
+    expect(out).toContain("bash");
+    expect(out).toContain("HALF RESULT");
   });
-});
 
-describe("rich tool renderers — main-window state wiring", () => {
-  it("passes shared state: renderResult sees renderCall's component (edit-diff pattern)", () => {
-    let seenByResult: unknown;
-    let seenArgs: unknown;
+  it("keeps renderer state shared between the call and its result (edit-diff pattern)", () => {
+    let seenByResult: unknown = "not called";
     const editLike = {
       renderCall: (_args: any, _theme: any, ctx: any) => {
-        // hang the diff on the shared call component, as pi's edit renderer does
-        ctx.state.callComponent = { diff: "DIFF HUNK" };
+        ctx.state.diff = "DIFF HUNK";
         return { render: () => ["CALL ROW"] };
       },
       renderResult: (_result: any, _opts: any, _theme: any, ctx: any) => {
-        seenByResult = ctx.state.callComponent;
-        seenArgs = ctx.args;
-        const diff = (ctx.state.callComponent as any)?.diff;
-        return { render: () => [diff === "DIFF HUNK" ? "RESULT WITH HUNKS" : "RESULT WITHOUT HUNKS"] };
+        seenByResult = ctx.state.diff;
+        return { render: () => [ctx.state.diff === "DIFF HUNK" ? "RESULT WITH HUNKS" : "RESULT WITHOUT HUNKS"] };
       },
     };
-    const session = mockSession([
-      { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "edit", arguments: { path: "x.ts", edits: [] } }] },
-      { role: "toolResult", toolCallId: "t1", toolName: "edit", isError: false, content: [{ type: "text", text: "ok" }] },
-    ], () => editLike);
-    const viewer = new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
-    const out = plain(viewer.render(120));
+    const out = render(
+      [{ role: "assistant", content: [CALL] }, OK_RESULT],
+      {},
+      () => editLike,
+    );
     expect(out).toContain("RESULT WITH HUNKS");
-    expect(seenArgs).toEqual({ path: "x.ts", edits: [] });
-    expect(seenByResult).toEqual({ diff: "DIFF HUNK" });
+    expect(seenByResult).toBe("DIFF HUNK");
   });
 
-  it("invokes renderResult every frame, handing back the previous component", () => {
+  it("re-invokes renderCall with the previous component when the renderer invalidates", async () => {
+    // pi's edit renderer lands its diff ASYNC via ctx.invalidate(). The
+    // component must survive across that boundary and hand the renderer its
+    // own previous component back, so the preview it built is still there.
     const lastComponents: unknown[] = [];
     const returned: unknown[] = [];
+    let preview: string[] | undefined;
     const def = {
-      renderResult: (_r: any, _o: any, _t: any, ctx: any) => {
+      renderCall: (_args: any, _theme: any, ctx: any) => {
         lastComponents.push(ctx.lastComponent);
-        const component = { render: () => [`R ${_r.content[0].text}`] };
+        const component = {
+          invalidate() {},
+          render: () => ["header", ...(preview ?? [])],
+        };
         returned.push(component);
+        if (returned.length === 1) {
+          Promise.resolve().then(() => {
+            preview = ["+ diff line"];
+            ctx.invalidate();
+          });
+        }
         return component;
       },
     };
-    const result = { role: "toolResult", toolCallId: "t1", toolName: "edit", isError: false, content: [{ type: "text", text: "ok" }] };
-    const session = mockSession([
-      { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "edit", arguments: {} }] },
-      result,
-    ], () => def);
+    const session = mockSession([{ role: "assistant", content: [CALL] }], () => def);
     const viewer = new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
-    viewer.render(120);
-    // Renderers are re-invoked when the frame is invalidated — a session event
-    // (or a renderer's own ctx.invalidate), not blindly every frame anymore.
-    session.emit();
-    viewer.render(120);
-    expect(lastComponents).toHaveLength(2);
-    expect(lastComponents[0]).toBeUndefined();
-    expect(lastComponents[1]).toBe(returned[0]);
+    expect(plain(viewer.render(120))).not.toContain("+ diff line");
+    await 0; // let the simulated async preview land
+    expect(plain(viewer.render(120))).toContain("+ diff line");
+    // The re-invocation after the async landing saw the component the
+    // previous invocation returned — the preview it built survives.
+    expect(lastComponents.at(-1)).toBe(returned.at(-2));
   });
 
-  it("toolCallId collision keeps separate state per execution", () => {
+  it("keeps separate renderer state per execution when call ids collide", () => {
     const states: unknown[] = [];
     const def = {
       renderCall: (_a: any, _t: any, ctx: any) => {
@@ -220,175 +200,179 @@ describe("rich tool renderers — main-window state wiring", () => {
     const session = mockSession([
       { role: "assistant", content: [
         { type: "toolCall", id: "t1", name: "edit", arguments: { n: 1 } },
-        { type: "toolCall", id: "t2", name: "edit", arguments: { n: 2 } },
+        { type: "toolCall", id: "t1", name: "edit", arguments: { n: 2 } },
       ] },
     ], () => def);
     const viewer = new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
     viewer.render(120);
-    expect(states[0]).not.toBe(states[1]);
+    // Component creation invokes the renderer more than once (constructor plus
+    // the started/args-complete marks) — what matters is that the two calls,
+    // despite the colliding id, hold distinct state objects.
+    expect(states).toHaveLength(6);
+    expect(states[0]).not.toBe(states[3]);
   });
 });
 
-describe("expanded tool output (ctrl+o)", () => {
-  const CTRL_O = "\x0f";
-
-  interface Captured {
-    resultOptions: any[];
-    callContexts: any[];
-  }
-
-  function expandViewer(captured: Captured) {
+describe("expanded tool output (o / ctrl+o)", () => {
+  function expandViewer() {
+    // Without renderers the component dumps full output (pi's main window
+    // always merges builtins, so expansion is a renderer concern). Simulate a
+    // renderer that honors the toggle, as pi's read/bash renderers do.
     const def = {
-      renderCall: (_args: any, _theme: any, ctx: any) => {
-        captured.callContexts.push(ctx);
-        return { render: () => [`CALL exp=${ctx.expanded}`] };
-      },
-      renderResult: (result: any, options: any) => {
-        captured.resultOptions.push(options);
-        return { render: () => [options.expanded ? `EXPANDED ${result.content[0].text}` : "COLLAPSED"] };
-      },
+      renderCall: () => ({ render: () => ["CALL ROW"] }),
+      renderResult: (result: any, options: any) => ({
+        render: () => [options.expanded ? `EXPANDED ${result.content[0].text}` : "COLLAPSED"],
+      }),
     };
     const session = mockSession([
       { role: "assistant", content: [CALL] },
       OK_RESULT,
     ], () => def);
-    return new ConversationViewer(mockTui(), session, mockRecord(), undefined, theme as any, vi.fn());
+    return new ConversationViewer(mockTui(60, 120), session, mockRecord(), undefined, theme as any, vi.fn());
   }
 
-  it("starts collapsed and threads the toggle into renderResult options and renderCall context", () => {
-    const captured: Captured = { resultOptions: [], callContexts: [] };
-    const viewer = expandViewer(captured);
-    const first = plain(viewer.render(120));
-    expect(first).toContain("COLLAPSED");
-    expect(first).toContain("CALL exp=false");
-    expect(captured.resultOptions[0].expanded).toBe(false);
+  it("starts collapsed and threads the toggle into the renderer on ctrl+o", () => {
+    const viewer = expandViewer();
+    expect(plain(viewer.render(120))).toContain("COLLAPSED");
 
-    viewer.handleInput(CTRL_O);
-    const second = plain(viewer.render(120));
-    expect(second).toContain(`EXPANDED ${(OK_RESULT.content[0] as any).text}`);
-    expect(second).toContain("CALL exp=true");
-    expect(captured.resultOptions.at(-1).expanded).toBe(true);
+    viewer.handleInput("\x0f");
+    expect(plain(viewer.render(120))).toContain(`EXPANDED ${(OK_RESULT.content[0] as any).text}`);
   });
 
-  it("toggles back off with a second press", () => {
-    const captured: Captured = { resultOptions: [], callContexts: [] };
-    const viewer = expandViewer(captured);
-    viewer.handleInput(CTRL_O);
-    viewer.handleInput(CTRL_O);
+  it("toggles back off with a second press, and `o` is the plain alias", () => {
+    const viewer = expandViewer();
+    viewer.handleInput("o");
+    expect(plain(viewer.render(120))).toContain("EXPANDED");
+    viewer.handleInput("o");
     expect(plain(viewer.render(120))).toContain("COLLAPSED");
-    expect(captured.resultOptions.at(-1).expanded).toBe(false);
   });
 });
 
-const CALL = { type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls -la\nsrc" } };
-const OK_RESULT = {
-  role: "toolResult",
-  toolCallId: "t1",
-  toolName: "bash",
-  isError: false,
-  content: [{ type: "text", text: "file1\nfile2\nfile3\nfile4\nfile5\nfile6" }],
-};
-const ERR_RESULT = {
-  role: "toolResult",
-  toolCallId: "t1",
-  toolName: "bash",
-  isError: true,
-  content: [{ type: "text", text: "boom: no such file" }],
-};
-
-describe("detailed agentic log (omp-style rendering)", () => {
-  it("renders a tool call with its key argument, not a bare [Tool: name]", () => {
-    const out = render([{ role: "assistant", content: [CALL] }]);
-    expect(out).toContain("⏺ bash");
-    expect(out).toContain("(ls -la src)");
-    expect(out).not.toContain("[Tool:");
+describe("transcript format (main-window components)", () => {
+  it("labels user messages with [User] so @-mentions stay attributable", () => {
+    const out = render([{ role: "user", content: "take another look at the diff" }]);
+    expect(out).toContain("[User]");
+    expect(out).toContain("take another look at the diff");
   });
 
-  it("falls back through argument keys to the first string present", () => {
-    const out = render([{ role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read", arguments: { file_path: "src/x.ts" } }] }]);
-    expect(out).toContain("read");
-    expect(out).toContain("(src/x.ts)");
+  it("renders assistant text as Markdown", () => {
+    const out = render([{ role: "assistant", content: [{ type: "text", text: "# Heading\n\nbody" }] }]);
+    expect(out).toContain("Heading");
+    expect(out).not.toContain("# Heading");
   });
 
-  it("pairs the result with its call: ✓, a preview, and an elision note", () => {
-    const out = render([
-      { role: "assistant", content: [CALL] },
-      OK_RESULT,
-    ]);
-    expect(out).toContain("✓");
-    expect(out).toContain("file1");
-    expect(out).toContain("file4");
-    expect(out).not.toContain("file5\n"); // beyond the preview window
-    expect(out).toContain("+2 lines (o/ctrl+o for full)");
-  });
-
-  it("does not also render a consumed result as a standalone [Result] block", () => {
-    const out = render([
-      { role: "assistant", content: [CALL] },
-      OK_RESULT,
-    ]);
-    expect(out).not.toContain("[Result]");
-    // The preview shows four of six lines — each body line appears exactly once.
-    expect(out.split("file1").length - 1).toBe(1);
-  });
-
-  it("renders error results with ✗ and the error body", () => {
-    const out = render([
-      { role: "assistant", content: [CALL] },
-      ERR_RESULT,
-    ]);
-    expect(out).toContain("✗ error");
-    expect(out).toContain("boom: no such file");
-  });
-
-  it("shows an awaiting marker for a call with no result yet on a running agent", () => {
-    const out = render([{ role: "assistant", content: [CALL] }]);
-    expect(out).toContain("○ awaiting result");
-  });
-
-  it("renders thinking blocks as a receded ✻ preview", () => {
+  it("renders thinking text without a fixed preview window", () => {
+    const thinking = Array.from({ length: 12 }, (_, i) => `step ${i + 1}`).join("\n");
     const out = render([{
       role: "assistant",
-      content: [{ type: "thinking", thinking: "Let me trace the data flow before editing." }, { type: "text", text: "On it." }],
+      content: [{ type: "thinking", thinking }, { type: "text", text: "On it." }],
     }]);
-    expect(out).toContain("✻ thinking");
-    expect(out).toContain("Let me trace the data flow");
+    expect(out).toContain("step 12");
     expect(out).toContain("On it.");
   });
 
-  it("m=full mode shows the whole result instead of the preview", () => {
-    const out = render([
-      { role: "assistant", content: [CALL] },
-      OK_RESULT,
-    ], {}, () => "all");
-    expect(out).toContain("file6");
-    expect(out).not.toContain("(o/ctrl+o for full)");
+  it("pairs a result with its call and does not repeat it as a standalone [Result]", () => {
+    const out = render([{ role: "assistant", content: [CALL] }, OK_RESULT]);
+    expect(out).toContain("row-14");
+    expect(out.match(/row-14\b/g)?.length).toBe(1);
+    expect(out).not.toContain("[Result]");
   });
 
-  it("o/ctrl+o expansion reveals the text preview's full output too", () => {
-    // The hint the preview prints must be true for the block that prints it:
-    // `expanded` widens the text fallback, not just the rich renderers.
-    const viewer = viewerFor([
-      { role: "assistant", content: [CALL] },
-      OK_RESULT,
-    ]);
-    viewer.handleInput("o");
-    const out = viewer.render(80).join("\n");
-    expect(out).toContain("file5");
-    expect(out).not.toContain("(o/ctrl+o for full)");
-  });
-
-  it("still renders orphaned results as the legacy [Result] block", () => {
-    const out = render([OK_RESULT]);
+  it("renders orphaned results as a dim [Result] block, byte-exact", () => {
+    const raw = ["#!/bin/sh", "# section", "3) alpha", "---", "next"].join("\n");
+    const out = render([{ role: "toolResult", toolCallId: "t1", toolName: "bash", isError: false, content: [{ type: "text", text: raw }] }]);
     expect(out).toContain("[Result]");
-    expect(out).toContain("file1");
+    for (const line of raw.split("\n")) expect(out).toContain(line);
+    expect(out).not.toContain("#! rewritten");
+  });
+
+  it("renders bash executions with command and output", () => {
+    const out = render([{
+      role: "bashExecution", command: "npm test", output: "all green", exitCode: 0, timestamp: Date.now(),
+    }]);
+    expect(out).toContain("npm test");
+    expect(out).toContain("all green");
+  });
+
+  it("shows the live activity tail for a running agent", () => {
+    const activity = {
+      activeTools: new Map([["read", { toolName: "read", args: { path: "file.ts" } }]] as any),
+      toolUses: 2,
+      responseText: "",
+      lastTool: "read",
+      lastActivity: "tool" as const,
+    };
+    const out = render([{ role: "user", content: "go" }], { status: "running" }, undefined, activity);
+    expect(out).toContain("▍");
+  });
+
+  it("shows the waiting placeholder for an empty transcript", () => {
+    const out = render([]);
+    expect(out).toContain("(waiting for first message...)");
+  });
+});
+
+describe("live tool output (streaming partials)", () => {
+  function streamingViewer() {
+    const messages = [{
+      role: "assistant",
+      content: [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "yes" } }],
+    }];
+    const session = mockSession(messages);
+    const viewer = new ConversationViewer(mockTui(60, 120), session, mockRecord({ status: "running" }), undefined, theme as any, vi.fn());
+    return { viewer, session };
+  }
+
+  it("feeds tool_execution_update text into the call's component", () => {
+    const { viewer, session } = streamingViewer();
+    let out = plain(viewer.render(120));
+    expect(out).toContain("bash");
+    expect(out).not.toContain("l6");
+
+    session.emit({ type: "tool_execution_update", toolCallId: "t1", partialResult: { content: [{ type: "text", text: "l1\nl2\nl3\nl4\nl5\nl6" }] } });
+    out = plain(viewer.render(120));
+    expect(out).toContain("l6");
+
+    session.emit({ type: "tool_execution_end", toolCallId: "t1" });
+    out = plain(viewer.render(120));
+    expect(out).toContain("bash");
+  });
+
+  it("replaces a partial with the final result when it arrives", () => {
+    const { viewer, session } = streamingViewer();
+    session.emit({ type: "tool_execution_update", toolCallId: "t1", partialResult: { content: [{ type: "text", text: "partial output" }] } });
+    expect(plain(viewer.render(120))).toContain("partial output");
+
+    (session.messages as any[]).push({ ...OK_RESULT, content: [{ type: "text", text: "final output" }] });
+    session.emit();
+    const out = plain(viewer.render(120));
+    expect(out).toContain("final output");
+    expect(out).not.toContain("partial output");
+  });
+});
+
+describe("streaming assistant message", () => {
+  it("renders the in-flight streaming message after the completed ones", () => {
+    const session = mockSession([{ role: "assistant", content: [{ type: "text", text: "final part" }] }]);
+    (session as any).state = { streamingMessage: { role: "assistant", content: [{ type: "text", text: "streaming part" }] } };
+    const viewer = new ConversationViewer(mockTui(60, 120), session, mockRecord({ status: "running" }), undefined, theme as any, vi.fn());
+    const out = plain(viewer.render(120));
+    expect(out).toContain("final part");
+    expect(out).toContain("streaming part");
+  });
+
+  it("shows the thinking placeholder while the streaming message is empty", () => {
+    const session = mockSession([{ role: "assistant", content: [{ type: "text", text: "earlier done" }] }]);
+    (session as any).state = { streamingMessage: { role: "assistant", content: [] } };
+    const viewer = new ConversationViewer(mockTui(60, 120), session, mockRecord({ status: "running" }), undefined, theme as any, vi.fn());
+    expect(plain(viewer.render(120))).toContain("✻ thinking…");
   });
 });
 
 describe("viewer scrollBy (mouse wheel funnel)", () => {
   function tallViewer() {
     const messages = Array.from({ length: 60 }, (_, i) => ({ role: "user", content: `line ${i}` }));
-    const viewer = new ConversationViewer(mockTui(), mockSession(messages), mockRecord({ status: "completed" }), undefined, theme as any, vi.fn());
+    const viewer = new ConversationViewer(mockTui(200, 120), mockSession(messages), mockRecord({ status: "completed" }), undefined, theme as any, vi.fn());
     return viewer;
   }
 

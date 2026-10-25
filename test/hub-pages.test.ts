@@ -1,4 +1,5 @@
 import * as piHost from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import type { AgentRecord } from "../src/types.js";
@@ -17,6 +18,9 @@ import type { FleetWorkflow } from "../src/ui/fleet-list.js";
 import { MASTER_LIST_WIDTH, PANE_PADDING } from "../src/ui/window-frame.js";
 import type { WorkflowDialogSource } from "../src/ui/workflow-view.js";
 import type { WorkflowAgentEntry } from "../src/workflow/progress.js";
+
+// The transcript components read pi's global theme; only the TUI normally sets it up.
+initTheme(undefined, false);
 
 const ESC = "\x1b";
 const DOWN = "\x1b[B";
@@ -1192,19 +1196,19 @@ describe("P8 — transcript grammar parity and refusal behavior", () => {
     const transcript = detailRows(h.frame()).join("\n");
     expect(transcript).toContain("[User]");
     expect(transcript).toContain("Migrate the schema in db.ts to v2");
-    expect(transcript).toContain("[Assistant]");
+    // Assistant text renders unlabeled, as on the main screen.
     expect(transcript).toContain("Adding a dual-write shim");
-    expect(transcript).toContain("✻ thinking");
-    expect(transcript).toContain("───");
+    expect(transcript).not.toContain("[Assistant]");
+    // Thinking renders as its collapsible block, as on the main screen.
+    expect(transcript).toContain("The v1 tables are created in init();");
     h.press(ESC);
     h.press(DOWN);
     h.press("\r"); // W
     h.press("\r"); // WA
     const embedded = detailRows(h.frame()).join("\n");
     expect(embedded).toContain("[User]");
-    expect(embedded).toContain("[Assistant]");
-    expect(embedded).toContain("✻ thinking");
-    expect(embedded).toContain("───");
+    expect(embedded).toContain("Adding a dual-write shim");
+    expect(embedded).toContain("The v1 tables are created in init();");
     // The same agent on the roster page has no parent run; on WA the run name
     // leads the line.
     expect(transcript).toContain("  ↳ —");

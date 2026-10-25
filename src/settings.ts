@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
-import type { AgentMentionMode, JoinMode, UIStyle, ViewerMarkdownMode, WidgetMode } from "./types.js";
+import type { AgentMentionMode, JoinMode, UIStyle, WidgetMode } from "./types.js";
 
 export type { UIStyle };
 
@@ -327,19 +327,6 @@ export interface SubagentsSettings {
    */
   packageWorkflows?: boolean | string[];
   /**
-   * How much of the conversation viewer's transcript renders as Markdown.
-   * Defaults to `assistant`. Applied live — the viewer's `m` key cycles this
-   * same setting, so a choice made in the overlay persists like one made in
-   * `/agents → Settings`.
-   *
-   * Scoped rather than all-or-nothing because the two kinds of content have
-   * different contracts: assistant text is authored as Markdown, while a tool
-   * result is whatever bytes the tool produced. Rendering the latter as
-   * Markdown is lossy in ways that look like the tool misbehaved — see
-   * `ViewerMarkdownMode` for the specific rewrites — so `all` is opt-in.
-   */
-  viewerMarkdown?: ViewerMarkdownMode;
-  /**
    * UI appearance style:
    * - `pi`: native Pi styling (edge-to-edge horizontal borders, no outer vertical side rails, themed footer).
    * - `claude`: Claude Code box styling (rounded corners `╭───╮`, outer `│` rails).
@@ -375,7 +362,6 @@ export interface SettingsAppliers {
   setReportUsage: (b: boolean) => void;
   setShowCost: (b: boolean) => void;
   setShowModel: (b: boolean) => void;
-  setViewerMarkdown: (mode: ViewerMarkdownMode) => void;
   setUIStyle: (style: UIStyle) => void;
   setPackageAgents: (gate: boolean | string[]) => void;
   setPackageWorkflows: (gate: boolean | string[]) => void;
@@ -387,7 +373,6 @@ export type SettingsEmit = (event: string, payload: unknown) => void;
 const VALID_JOIN_MODES: ReadonlySet<string> = new Set<JoinMode>(["async", "group", "smart"]);
 const VALID_TOOL_DESCRIPTION_MODES: ReadonlySet<string> = new Set<ToolDescriptionMode>(["full", "compact", "custom"]);
 const VALID_WIDGET_MODES: ReadonlySet<string> = new Set<WidgetMode>(["all", "background", "off"]);
-const VALID_VIEWER_MARKDOWN_MODES: ReadonlySet<string> = new Set<ViewerMarkdownMode>(["off", "assistant", "all"]);
 const VALID_AGENT_MENTION_MODES: ReadonlySet<string> = new Set<AgentMentionMode>(["model", "direct", "off"]);
 const VALID_UI_STYLES: ReadonlySet<string> = new Set<UIStyle>(["pi", "claude"]);
 
@@ -512,9 +497,6 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (typeof r.showModel === "boolean") {
     out.showModel = r.showModel;
   }
-  if (typeof r.viewerMarkdown === "string" && VALID_VIEWER_MARKDOWN_MODES.has(r.viewerMarkdown)) {
-    out.viewerMarkdown = r.viewerMarkdown as ViewerMarkdownMode;
-  }
   if (typeof r.uiStyle === "string" && VALID_UI_STYLES.has(r.uiStyle)) {
     out.uiStyle = r.uiStyle as UIStyle;
   }
@@ -609,7 +591,6 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.reportUsage === "boolean") appliers.setReportUsage(s.reportUsage);
   if (typeof s.showCost === "boolean") appliers.setShowCost(s.showCost);
   if (typeof s.showModel === "boolean") appliers.setShowModel(s.showModel);
-  if (s.viewerMarkdown) appliers.setViewerMarkdown(s.viewerMarkdown);
   if (s.uiStyle) appliers.setUIStyle(s.uiStyle);
   if (typeof s.workflowsEnabled === "boolean") appliers.setWorkflowsEnabled(s.workflowsEnabled);
   if (s.packageAgents !== undefined) appliers.setPackageAgents(s.packageAgents);

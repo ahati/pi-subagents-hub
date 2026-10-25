@@ -7,12 +7,11 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import type {
-  MarkdownOptions,
   MarkdownTheme,
   OverlayOptions,
   TUI,
 } from "@earendil-works/pi-tui";
-import type { UIStyle, ViewerMarkdownMode } from "../../types.js";
+import type { UIStyle } from "../../types.js";
 import type { Theme } from "../agent-widget.js";
 
 export const MIN_VIEWPORT = 3;
@@ -22,26 +21,11 @@ export const COMPOSER_ROWS = 2;
 export const VIEWPORT_HEIGHT_PCT = 70;
 export const SCROLLBAR_WIDTH = 1;
 
-/**
- * Cap on a single tool result or bash output before the viewer elides the rest.
- */
-export const RESULT_MAX_CHARS = 16_000;
-
 /** The `b` affordance: whether this run can be handed to the background now, and the handoff. */
 export interface ViewerBackgroundAction {
   available(): boolean;
   send(): void;
 }
-
-/** Cycle order for the viewer's `m` key. */
-export const MARKDOWN_MODES: readonly ViewerMarkdownMode[] = ["off", "assistant", "all"];
-
-/** Detailed-log sizing: result preview lines, error preview lines, thinking preview lines. */
-export const RESULT_PREVIEW_LINES = 4;
-export const ERROR_PREVIEW_LINES = 10;
-export const THINKING_PREVIEW_LINES = 6;
-/** Lines of a running tool's streamed output shown under its call. */
-export const LIVE_OUTPUT_LINES = 4;
 
 /**
  * Optional behavior overrides for a viewer embedded in a larger surface (the
@@ -127,54 +111,6 @@ export function getConversationOverlayOptions(tui: Pick<TUI, "mode">): OverlayOp
 }
 
 /**
- * Tool-argument keys worth showing on a call line, most identifying first —
- * the command run, the path touched, the pattern searched. Anything stringy
- * beyond these falls back to the first string value present.
- */
-export const CALL_ARG_KEYS = [
-  "command", "path", "file_path", "filePath", "pattern", "query", "url",
-  "skill", "name", "description", "prompt",
-] as const;
-
-/** `ls -la\nsrc` → `ls -la src`, truncated to a call-line-friendly length. */
-export function oneLine(text: string, max = 60): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? flat.slice(0, max - 1) + "…" : flat;
-}
-
-/** The one argument that says what this call does, for the `⏺ name(...)` line. */
-export function describeToolArgs(args: unknown): string {
-  if (args == null) return "";
-  if (typeof args !== "object") return oneLine(String(args));
-  const obj = args as Record<string, unknown>;
-  for (const key of CALL_ARG_KEYS) {
-    const v = obj[key];
-    if (typeof v === "string" && v.trim()) return oneLine(v);
-    if (typeof v === "number" || typeof v === "boolean") return `${key}: ${v}`;
-  }
-  for (const v of Object.values(obj)) {
-    if (typeof v === "string" && v.trim()) return oneLine(v);
-  }
-  return "";
-}
-
-/** Footer labels — short, because the idle footer is already full at 80 columns. */
-export const MARKDOWN_MODE_LABELS: Record<ViewerMarkdownMode, string> = {
-  off: "raw",
-  assistant: "md",
-  all: "md+",
-};
-
-/**
- * Both options keep the renderer from *rewriting* source that only looks like
- * Markdown.
- */
-export const MARKDOWN_OPTIONS: MarkdownOptions = {
-  preserveOrderedListMarkers: true,
-  preserveBackslashEscapes: true,
-};
-
-/**
  * Tool renderers, as merged onto a definition: pi's main window does exactly
  * this merge (`withBuiltInRenderers(toolName, session.getToolDefinition(name))`).
  */
@@ -256,30 +192,4 @@ export function loadBuiltinRenderers(): Promise<Record<string, ToolRenderers> | 
     }
   })();
   return builtinRenderersPromise;
-}
-
-/**
- * Cap `text` at `RESULT_MAX_CHARS`, reporting the elision separately rather than
- * appending it.
- */
-export function capResult(text: string): { text: string; elided: number } {
-  if (text.length <= RESULT_MAX_CHARS) return { text, elided: 0 };
-  return {
-    text: text.slice(0, RESULT_MAX_CHARS),
-    elided: text.length - RESULT_MAX_CHARS,
-  };
-}
-
-/**
- * `999` · `1.5k` · `8.4M` — a magnitude cue, not an exact count, past 1000.
- */
-export function humanCount(n: number): string {
-  if (n < 1_000) return `${n}`;
-  const thousands = n < 999_950;
-  const value = thousands ? n / 1_000 : n / 1_000_000;
-  return `${value.toFixed(1).replace(/\.0$/, "")}${thousands ? "k" : "M"}`;
-}
-
-export function truncationNote(elided: number): string {
-  return `... (truncated, ${humanCount(elided)} more character${elided === 1 ? "" : "s"})`;
 }

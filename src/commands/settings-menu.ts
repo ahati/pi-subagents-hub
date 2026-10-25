@@ -53,7 +53,6 @@ import type {
   AgentMentionMode,
   JoinMode,
   UIStyle,
-  ViewerMarkdownMode,
   WidgetMode,
 } from "../types.js";
 import type { AgentWidget } from "../ui/agent-widget.js";
@@ -81,8 +80,6 @@ export interface SettingsMenuDeps {
   setShowCost: (b: boolean) => void;
   isShowModelEnabled: () => boolean;
   setShowModel: (b: boolean) => void;
-  getViewerMarkdown: () => ViewerMarkdownMode;
-  setViewerMarkdown: (m: ViewerMarkdownMode) => void;
   getUIStyle: () => UIStyle;
   setUIStyle: (s: UIStyle) => void;
   isFleetViewEnabled: () => boolean;
@@ -127,7 +124,6 @@ export function snapshotSettings(deps: SettingsMenuDeps) {
     reportUsage: deps.isReportUsageEnabled(),
     showCost: deps.isShowCostEnabled(),
     showModel: deps.isShowModelEnabled(),
-    viewerMarkdown: deps.getViewerMarkdown(),
     packageAgents: getPackageAgentsGate(),
     packageWorkflows: getPackageWorkflowsGate(),
     uiStyle: deps.getUIStyle(),
@@ -152,19 +148,6 @@ export function describeGateSetting(gate: ReturnType<typeof getPackageAgentsGate
   return gate.length > 0
     ? `${base} Currently limited to: ${gate.join(", ")}.`
     : `${base} Currently limited to an empty list, so nothing loads.`;
-}
-
-export function persistSettings(
-  ctx: ExtensionCommandContext | undefined,
-  changeMsg: string,
-  deps: SettingsMenuDeps,
-): void {
-  const { message, level } = saveAndEmitChanged(
-    snapshotSettings(deps),
-    changeMsg,
-    (event, payload) => deps.pi.events.emit(event, payload),
-  );
-  if (level === "warning") ctx?.ui.notify(message, level);
 }
 
 export function notifyApplied(
@@ -199,8 +182,6 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
     setShowCost,
     isShowModelEnabled,
     setShowModel,
-    getViewerMarkdown,
-    setViewerMarkdown,
     getUIStyle,
     setUIStyle,
     isFleetViewEnabled,
@@ -383,14 +364,6 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
           "Name the model driving each agent, and the thinking level it is running at, on the widget's running rows. The Agent tool result and the conversation viewer show the pair either way — this adds it to the widget, where the row is already dense.",
         currentValue: isShowModelEnabled() ? "on" : "off",
         values: ["on", "off"],
-      },
-      {
-        id: "viewerMarkdown",
-        label: "Viewer markdown",
-        description:
-          "How much of the conversation viewer renders as Markdown. assistant = assistant text only (default); all = tool results too, for tools that emit Markdown — accepting that a Markdown pass over a diff or a log eats `#` comments, swallows a `---` line and re-fences indented output; off = everything verbatim. `m` in the viewer cycles the same setting (footer: raw / md / md+).",
-        currentValue: getViewerMarkdown(),
-        values: ["off", "assistant", "all"],
       },
       {
         id: "uiStyle",
@@ -583,9 +556,6 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
       const enabled = value === "on";
       setShowModel(enabled);
       notifyApplied(ctx, `Model display ${enabled ? "enabled" : "disabled"}`, deps);
-    } else if (id === "viewerMarkdown") {
-      setViewerMarkdown(value as ViewerMarkdownMode);
-      notifyApplied(ctx, `Viewer markdown set to ${value}`, deps);
     } else if (id === "uiStyle") {
       setUIStyle(value as UIStyle);
       notifyApplied(ctx, `UI style set to ${value}`, deps);

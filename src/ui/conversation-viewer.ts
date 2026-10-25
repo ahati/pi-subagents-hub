@@ -13,7 +13,12 @@
  *     fullscreen machinery — even when pi itself runs fullscreen.
  */
 
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import {
+  type AgentSession,
+  AssistantMessageComponent,
+  BashExecutionComponent,
+  ToolExecutionComponent,
+} from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   type Focusable,
@@ -30,7 +35,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { extractText } from "../context.js";
-import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
+import type { AgentRecord } from "../types.js";
 import type { AgentActivity, Theme } from "./agent-widget.js";
 import {
   computeChromeLines,
@@ -41,18 +46,14 @@ import {
   resolveIdentityBlock,
 } from "./viewer/viewer-chrome.js";
 import {
-  buildContentLinesUncached,
+  buildTranscript,
   computeLastMessageSignature,
-  type MarkdownCacheEntry,
-  renderMarkdownLines,
-  wrapRawLines,
+  stripShellZones,
+  type TranscriptBuild,
 } from "./viewer/viewer-content.js";
-import type { ViewerRenderDeps } from "./viewer/viewer-renderers.js";
 import {
   type ConversationViewerOptions,
   loadBuiltinRenderers,
-  MARKDOWN_MODE_LABELS,
-  MARKDOWN_MODES,
   resolveMarkdownTheme,
   SCROLLBAR_WIDTH,
   type ToolRenderers,
@@ -86,11 +87,11 @@ export class ConversationViewer implements Component, Focusable {
     return this.composer !== undefined;
   }
   private readonly markdownTheme: MarkdownTheme;
-  private markdownModeOverride: ViewerMarkdownMode | undefined;
-  private readonly markdownCache = new WeakMap<object, MarkdownCacheEntry>();
-  private readonly callComponentCache = new WeakMap<object, { component: unknown }>();
-  private readonly resultComponentCache = new WeakMap<object, { component: unknown }>();
-  private readonly toolExecState = new Map<string, Record<string, unknown>>();
+  private readonly assistantComponents = new WeakMap<object, AssistantMessageComponent>();
+  private readonly toolComponentsByCall = new WeakMap<object, ToolExecutionComponent>();
+  private readonly toolFeeds = new WeakMap<object, { final: boolean; partial: string | undefined }>();
+  private toolComponents: ToolExecutionComponent[] = [];
+  private bashComponents: BashExecutionComponent[] = [];
   private readonly partials = new Map<string, string>();
   private static readonly PARTIAL_CAP = 100_000;
   private contentCache: { key: string; lines: string[] } | undefined;
@@ -108,8 +109,6 @@ export class ConversationViewer implements Component, Focusable {
     keybindings?: ViewerKeybindings,
     private onSteer?: (message: string) => void,
     private showCost = false,
-    private viewerMarkdown?: () => ViewerMarkdownMode,
-    private onMarkdownMode?: (mode: ViewerMarkdownMode) => void,
     scrollbarMode: ScrollViewScrollbar = "auto",
     private onBackground?: ViewerBackgroundAction,
     private options?: ConversationViewerOptions,
@@ -200,18 +199,12 @@ export class ConversationViewer implements Component, Focusable {
       return;
     }
 
-    if (matchesKey(data, "m")) {
-      this.stopArmed = false;
-      const next = MARKDOWN_MODES[(MARKDOWN_MODES.indexOf(this.markdownMode()) + 1) % MARKDOWN_MODES.length];
-      this.markdownModeOverride = next;
-      this.onMarkdownMode?.(next);
-      this.tui.requestRender();
-      return;
-    }
-
     if (this.keys.expand(data)) {
       this.stopArmed = false;
       this.expanded = !this.expanded;
+      for (const comp of this.toolComponents) comp.setExpanded(this.expanded);
+      for (const comp of this.bashComponents) comp.setExpanded(this.expanded);
+      this.contentDirty = true;
       this.tui.requestRender();
       return;
     }
@@ -439,7 +432,6 @@ export class ConversationViewer implements Component, Focusable {
       if (this.isStoppable()) {
         footerActions.push({ label: this.stopArmed ? "x again to STOP" : "x stop", key: "x" });
       }
-      footerActions.push({ label: `m ${MARKDOWN_MODE_LABELS[this.markdownMode()]}`, key: "m" });
       const actions = footerActions.map(a => th.fg(a.key === "x" && this.stopArmed ? "error" : "dim", a.label));
       const quitLabel = this.options?.onBack ? this.backHintText() : "Esc close";
       footerActions.push({ label: quitLabel, key: "\x1b" });
@@ -474,10 +466,6 @@ export class ConversationViewer implements Component, Focusable {
 
   private isStoppable(): boolean {
     return !!this.onStop && (this.record.status === "running" || this.record.status === "queued");
-  }
-
-  private markdownMode(): ViewerMarkdownMode {
-    return this.markdownModeOverride ?? this.viewerMarkdown?.() ?? "assistant";
   }
 
   private backHintText(): string {
@@ -569,50 +557,35 @@ export class ConversationViewer implements Component, Focusable {
     return computeChromeLines(this.fullscreen, this.options, identityCount, this.composing);
   }
 
-  private getRenderDeps(): ViewerRenderDeps {
-    return {
-      theme: this.theme,
-      expanded: this.expanded,
-      markdownMode: this.markdownMode(),
-      callComponentCache: this.callComponentCache,
-      resultComponentCache: this.resultComponentCache,
-      toolExecState: this.toolExecState,
-      builtinRenderers: this.builtinRenderers,
-      onInvalidate: () => {
-        this.contentDirty = true;
-        this.tui.requestRender();
-      },
-      rawLines: (text, width, dim) => wrapRawLines(text, width, dim, this.theme),
-      markdownLines: (msg, text, width, dim) =>
-        renderMarkdownLines(
-          msg,
-          text,
-          width,
-          dim,
-          this.markdownCache,
-          this.markdownTheme,
-          this.theme,
-        ),
-    };
-  }
-
   private buildContentLines(width: number): string[] {
     if (width <= 0) return [];
 
-    const key = `${width}|${this.record.status}|${this.markdownMode()}|${this.expanded}|${this.session.messages.length}|${computeLastMessageSignature(this.session)}`;
+    const key = `${width}|${this.record.status}|${this.session.messages.length}|${computeLastMessageSignature(this.session)}`;
     if (!this.contentDirty && this.contentCache?.key === key) {
       return this.contentCache.lines;
     }
 
-    const lines = buildContentLinesUncached(width, {
+    const build: TranscriptBuild = buildTranscript({
+      tui: this.tui,
       session: this.session,
       record: this.record,
       activity: this.activity,
       theme: this.theme,
-      mode: this.markdownMode(),
+      markdownTheme: this.markdownTheme,
       partials: this.partials,
-      renderDeps: this.getRenderDeps(),
+      builtinRenderers: this.builtinRenderers,
+      expanded: this.expanded,
+      invalidate: () => {
+        this.contentDirty = true;
+        this.tui.requestRender();
+      },
+      assistantComponents: this.assistantComponents,
+      toolComponents: this.toolComponentsByCall,
+      toolFeeds: this.toolFeeds,
     });
+    this.toolComponents = build.toolComponents;
+    this.bashComponents = build.bashComponents;
+    const lines = build.container.render(width).map(stripShellZones);
     this.contentCache = { key, lines };
     this.contentDirty = false;
     return lines;

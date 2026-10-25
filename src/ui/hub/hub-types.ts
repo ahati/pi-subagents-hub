@@ -4,7 +4,7 @@
 
 import type { ScrollViewScrollbar } from "@earendil-works/pi-tui";
 import type { AgentManager } from "../../agent-manager.js";
-import type { AgentRecord, UIStyle, ViewerMarkdownMode } from "../../types.js";
+import type { AgentRecord, UIStyle } from "../../types.js";
 import type { AgentActivity, Theme } from "../agent-widget.js";
 import type { ViewerBackgroundAction } from "../conversation-viewer.js";
 import type { FleetWorkflow } from "../fleet-list.js";
@@ -173,8 +173,6 @@ export interface AgentHubDeps {
   manager: Pick<AgentManager, "listAgents" | "abort" | "steer">;
   agentActivity: Map<string, AgentActivity>;
   showCost: boolean;
-  viewerMarkdown?: () => ViewerMarkdownMode;
-  onViewerMarkdown?: (mode: ViewerMarkdownMode) => void;
   workflows?: () => readonly FleetWorkflow[];
   workflowRun?: (id: string) => WorkflowDialogSource | undefined;
   stopWorkflow?: (id: string) => boolean | undefined;

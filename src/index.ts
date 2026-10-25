@@ -51,7 +51,6 @@ import {
 } from "./commands/pause-continue.js";
 import { ParkGateController } from "./commands/pause-state.js";
 import {
-  persistSettings,
   type SettingsMenuDeps,
   showSettings,
 } from "./commands/settings-menu.js";
@@ -116,7 +115,6 @@ import type {
   JoinMode,
   NotificationDetails,
   UIStyle,
-  ViewerMarkdownMode,
   WidgetMode,
 } from "./types.js";
 import {
@@ -192,14 +190,6 @@ export default function (pi: ExtensionAPI) {
   let showModel = false;
   function isShowModelEnabled(): boolean { return showModel; }
   function setShowModel(b: boolean): void { showModel = b; widget.update(); }
-
-  let viewerMarkdown: ViewerMarkdownMode = "assistant";
-  function getViewerMarkdown(): ViewerMarkdownMode { return viewerMarkdown; }
-  function setViewerMarkdown(mode: ViewerMarkdownMode): void { viewerMarkdown = mode; }
-  function chooseViewerMarkdown(mode: ViewerMarkdownMode, ctx?: ExtensionCommandContext): void {
-    setViewerMarkdown(mode);
-    persistSettings(ctx, `Viewer markdown set to ${mode}`, settingsDeps);
-  }
 
   const pendingUsage = new PendingUsagePool();
   const park = new ParkGateController();
@@ -324,8 +314,6 @@ export default function (pi: ExtensionAPI) {
     manager,
     agentActivity,
     isShowCostEnabled,
-    getViewerMarkdown,
-    (mode) => chooseViewerMarkdown(mode, currentCtx as unknown as ExtensionCommandContext | undefined),
     getFullscreenScrollbar,
     handoff.backgroundActionFor,
     getUIStyle,
@@ -429,7 +417,6 @@ export default function (pi: ExtensionAPI) {
       setReportUsage,
       setShowCost,
       setShowModel,
-      setViewerMarkdown,
       setPackageAgents: setPackageAgentsGate,
       setPackageWorkflows: setPackageWorkflowsGate,
       setUIStyle,
@@ -540,8 +527,6 @@ export default function (pi: ExtensionAPI) {
     setShowCost,
     isShowModelEnabled,
     setShowModel,
-    getViewerMarkdown,
-    setViewerMarkdown,
     getUIStyle,
     setUIStyle,
     isFleetViewEnabled,

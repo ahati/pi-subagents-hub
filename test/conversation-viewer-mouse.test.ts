@@ -1,8 +1,12 @@
 import type { AgentSession, AgentSessionEventListener } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Input, ScrollView, type ScrollViewScrollbar, type Terminal, Text, type TUI, TuiAltScreen, type TuiMode, type TuiMouseEvent, VStack, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRecord } from "../src/types.js";
 import { ConversationViewer, getConversationOverlayOptions } from "../src/ui/conversation-viewer.js";
+
+// The transcript components read pi's global theme; only the TUI normally sets it up.
+initTheme(undefined, false);
 
 function setup(rows = 20, columns = 100, host?: TUI, scrollbar: ScrollViewScrollbar = "always", mode: TuiMode = "fullscreen") {
   const terminal = { rows, columns };
@@ -18,7 +22,7 @@ function setup(rows = 20, columns = 100, host?: TUI, scrollbar: ScrollViewScroll
   const viewer = new ConversationViewer(tui, session, record, undefined, {
     fg: (_color: string, text: string) => text,
     bold: (text: string) => text,
-  }, done, stop, undefined, steer, false, undefined, undefined, scrollbar);
+  }, done, stop, undefined, steer, false, scrollbar);
   const render = () => viewer.render(terminal.columns);
   const mouse = (event: Partial<TuiMouseEvent>) => viewer.handleMouse({
     type: "wheel", button: "none", x: 10, y: 8, screenX: 10, screenY: 8,
@@ -183,7 +187,9 @@ describe("fullscreen conversation observer", () => {
     const { render, messages, viewer } = setup(20, 100, undefined, mode);
     try {
       messages[0].content = "x".repeat(99);
-      expect(render()).toContain(` ${"x".repeat(99)}`);
+      // The user message renders inside its themed background, so compare stripped.
+      const stripped = render().map(l => l.replace(/\u001b\[[0-9;]*m/g, ""));
+      expect(stripped).toContain(` ${"x".repeat(99)}`);
     } finally {
       viewer.dispose();
     }

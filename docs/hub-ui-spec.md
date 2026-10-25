@@ -117,12 +117,12 @@ in full — the fitter may drop hints at narrower widths.
 
 | Page | Reached by | Footer left slot | Footer right slot |
 |---|---|---|---|
-| **R** — roster, subagent selected | hub open; the window's top page | `<N> lines · <P>% · Enter steer · x stop · m md` | `PgUp/PgDn · j scroll · o expand · l log · p pause · c copy · f full · Esc close` |
+| **R** — roster, subagent selected | hub open; the window's top page | `<N> lines · <P>% · Enter steer · x stop` | `PgUp/PgDn · j scroll · o expand · l log · p pause · c copy · f full · Esc close` |
 | **R** — roster, run selected | `↑↓` onto a run row | `⏎ open run · s stop run · c copy` | `↑↓ select · ⇥ activity · f full · Esc close` |
-| **TD** — expanded tool-call | `o` / `ctrl+o` in R or WA | as the page it sits in, with `m md` swapped for `c copy diff · o collapse` | as the page it sits in, without `o expand` |
+| **TD** — expanded tool-call | `o` / `ctrl+o` in R or WA | as the page it sits in, with `c copy diff · o collapse` | as the page it sits in, without `o expand` |
 | **SL** — subagent log | `l` on a subagent row (in R's conversation) | `<N> lines · <P>% · x stop` | `↑↓ scroll · c copy tail · p pause agent · f full · Esc back` |
 | **W** — workflow run | `⏎` on a run row; fleet Enter on a run; `/agents → Workflows` | `<done>/<total> agents · phase <n> of <m> · p pause run` (or `p resume run`) | `↑↓ item · ⏎ agent · l run log · s stop run · f full · Esc roster` |
-| **WA** — agent inside a run | `⏎` on an agent row in W | `<N> lines · <P>% · Enter steer · x stop · m md · s skip · r retry` | `PgUp/PgDn · j scroll · o expand · l log · p pause · c copy · f full · Esc back` |
+| **WA** — agent inside a run | `⏎` on an agent row in W | `<N> lines · <P>% · Enter steer · x stop · s skip · r retry` | `PgUp/PgDn · j scroll · o expand · l log · p pause · c copy · f full · Esc back` |
 | **SAL** — run-agent log | `l` in WA | `<N> lines · <P>% · x stop` | `↑↓ scroll · c copy tail · p pause agent · f full · Esc back` |
 | **L** — run log | `l` in W | `<N> lines · <P>% · s stop run` | `↑↓ scroll · c copy tail · f full · Esc back` |
 
@@ -200,7 +200,7 @@ One row, full window width, under the band rule — never a split row, never
 two stacked rows:
 
 - **left slot** — the readout and live actions: `<N> lines · <P>%` then
-  `Enter steer · x stop · m md` on the transcript pages, `x stop` alone on the log pages;
+  `Enter steer · x stop` on the transcript pages, `x stop` alone on the log pages;
   on **R** the selected row's action keys; on **W** the run counters;
 - **right slot** — navigation, then the page's keys, then the twin toggle and
   the escape anchor: `PgUp/PgDn · j scroll · <page keys> · f <twin> ·
@@ -208,13 +208,13 @@ two stacked rows:
 
 The slots keep at least two columns between them and the right slot is flush
 to the band's right edge. When the pair overflows, whole hints drop in this
-order: (1) the readout; (2) left actions right-to-left — `m md` first,
+order: (1) the readout; (2) left actions right-to-left — `x stop` first,
 `Enter steer` last; (3) right hints right-to-left — the `f` twin first — with
 the `Esc …` anchor pinned. Hints are never cut mid-hint. `x` is armed on
 first press (`x again to STOP`); `k` aliases `x` on roster and transcript
 pages. The readout is the first thing the band gives up: at 120 columns **R**
 with a subagent selected, **WA** and **TD** have already dropped `<N> lines ·
-<P>%` (**TD**, which carries `c copy diff` instead of `m md`, its `o collapse`
+<P>%` (**TD**, which carries `c copy diff`, its `o collapse`
 too) — the frames show the fitter's honest output; wider terminals restore
 them.
 
@@ -239,7 +239,7 @@ them.
 │                    │ ▍ editing…                                                                                      │
 │                    │                                                                                                 │
 │ ───────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────── │
-│ Enter steer · x stop · m md          PgUp/PgDn · j scroll · o expand · l log · p pause · c copy · f full · Esc close │
+│ Enter steer · x stop                 PgUp/PgDn · j scroll · o expand · l log · p pause · c copy · f full · Esc close │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -419,7 +419,7 @@ left list switches agents in place.
 │                    │   └ +42 −6 [━━━━━━━━━━] • 1 hunk at line 88                                                     │
 │                    │ ▍ editing 2 files…                                                                              │
 │ ───────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────── │
-│ Enter steer · x stop · m md           PgUp/PgDn · j scroll · o expand · l log · p pause · c copy · f full · Esc back │
+│ Enter steer · x stop                  PgUp/PgDn · j scroll · o expand · l log · p pause · c copy · f full · Esc back │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 

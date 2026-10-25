@@ -35,7 +35,7 @@ vi.mock("../src/ui/fleet-list.js", async () => {
   return {
     FleetList: class {
       constructor(...args: unknown[]) {
-        backgroundActionFor = args[6] as BackgroundActionFor;
+        backgroundActionFor = args[4] as BackgroundActionFor;
         fleet = this as any;
       }
       setUICtx = vi.fn();
@@ -63,8 +63,8 @@ vi.mock("../src/ui/fleet-list.js", async () => {
           (tui: any, theme: any, _keys: unknown, done: () => void) =>
             new ConversationViewer(
               tui, record.session, record, undefined, theme, done,
-              undefined, undefined, undefined, false, undefined, undefined,
-              "auto", backgroundActionFor?.(record, (m: string) => uiOverride.notify(m, "info")),
+              undefined, undefined, undefined, false, "auto",
+              backgroundActionFor?.(record, (m: string) => uiOverride.notify(m, "info")),
             ),
         );
       });
