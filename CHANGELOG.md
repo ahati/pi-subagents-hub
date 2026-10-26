@@ -9,6 +9,8 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+## [2026.10.26-r1] - 2026-10-26
+
 ### Added
 - **Nested agents can ask their parent for clarification instead of guessing.** Every non-isolated subagent — at any depth, with or without a delegation allowlist — gets `ask_parent`: the question — with the assumption the child will proceed on — is delivered to the nearest ancestor that can actually take a turn (blocked ancestors are skipped; the chain ends at the main session, which answers via the new `answer_subagent` tool), the child keeps working, and the answer arrives mid-run as a steering message. Unanswered questions ride the result as a footer; errors and aborts drop them rather than dangling. Replaces the post-hoc prose protocol of [tintinweb/pi-subagents#410](https://github.com/tintinweb/pi-subagents/pull/410), whose resume instruction was injected exactly where no resume path existed; design notes in `docs/a2a-questions.md`.
 - **The conversation viewer's original flat transcript is back as `viewerStyle: "compact"`** (default `"chat"`). The main-screen component rendering stays the default; `compact` restores the previous transcript — `[User]`/`[Assistant]` labels, `───` separators, dim `✻ thinking` previews, `⏺ name(arg)` call lines and tool results capped to a four-line preview (`o`/`ctrl+o` expands) — with assistant text still rendered as Markdown. Set via `/agents → Settings → Viewer style` or `subagents.json`; read at render time, so switching restyles an open viewer in place. The compact path resolves tool renderers through pi's renderer chain like the chat path, and model-facing text is untouched either way.
