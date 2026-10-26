@@ -115,6 +115,7 @@ import type {
   JoinMode,
   NotificationDetails,
   UIStyle,
+  ViewerStyle,
   WidgetMode,
 } from "./types.js";
 import {
@@ -297,6 +298,10 @@ export default function (pi: ExtensionAPI) {
   function getUIStyle(): UIStyle { return uiStyle; }
   function setUIStyle(s: UIStyle): void { uiStyle = s; widget.update(); fleet.update(); }
 
+  let viewerStyle: ViewerStyle = bootSettings.viewerStyle ?? "chat";
+  function getViewerStyle(): ViewerStyle { return viewerStyle; }
+  function setViewerStyle(s: ViewerStyle): void { viewerStyle = s; fleet.update(); }
+
   let widgetMode: WidgetMode = "background";
   function getWidgetMode(): WidgetMode { return widgetMode; }
   widget = new AgentWidget(manager, agentActivity, getWidgetMode, isShowCostEnabled, isShowModelEnabled, getUIStyle);
@@ -317,6 +322,7 @@ export default function (pi: ExtensionAPI) {
     getFullscreenScrollbar,
     handoff.backgroundActionFor,
     getUIStyle,
+    getViewerStyle,
   );
 
   fleet.setLifecycleActions({
@@ -420,6 +426,7 @@ export default function (pi: ExtensionAPI) {
       setPackageAgents: setPackageAgentsGate,
       setPackageWorkflows: setPackageWorkflowsGate,
       setUIStyle,
+      setViewerStyle,
     },
     (event, payload) => pi.events.emit(event, payload),
   );
@@ -529,6 +536,8 @@ export default function (pi: ExtensionAPI) {
     setShowModel,
     getUIStyle,
     setUIStyle,
+    getViewerStyle,
+    setViewerStyle,
     isFleetViewEnabled,
     setFleetViewEnabled,
     getAgentMentionMode,

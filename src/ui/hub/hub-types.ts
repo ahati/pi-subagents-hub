@@ -4,7 +4,7 @@
 
 import type { ScrollViewScrollbar } from "@earendil-works/pi-tui";
 import type { AgentManager } from "../../agent-manager.js";
-import type { AgentRecord, UIStyle } from "../../types.js";
+import type { AgentRecord, UIStyle, ViewerStyle } from "../../types.js";
 import type { AgentActivity, Theme } from "../agent-widget.js";
 import type { ViewerBackgroundAction } from "../conversation-viewer.js";
 import type { FleetWorkflow } from "../fleet-list.js";
@@ -183,6 +183,8 @@ export interface AgentHubDeps {
   scrollbarMode?: () => ScrollViewScrollbar;
   backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction;
   uiStyle?: () => UIStyle;
+  /** Transcript rendering for the hub's conversation viewer; read at render time. */
+  viewerStyle?: () => ViewerStyle;
 }
 
 export interface HubResumeState {

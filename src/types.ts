@@ -104,6 +104,15 @@ export type JoinMode = 'async' | 'group' | 'smart';
 export type UIStyle = 'pi' | 'claude';
 
 /**
+ * How the conversation viewer renders a subagent transcript.
+ * - `chat`: pi's main-screen message components (the same tree the main window
+ *   renders) — transcripts look and stream like main-chat output.
+ * - `compact`: the original flat transcript — `[User]` / `[Assistant]` labels,
+ *   dim thinking previews, capped tool output, `───` separators.
+ */
+export type ViewerStyle = 'chat' | 'compact';
+
+/**
  * Display mode for the persistent above-editor agent widget.
  * - `all`: show every agent (foreground + background).
  * - `background`: hide foreground agents (they already render inline as the

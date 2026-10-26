@@ -11,7 +11,7 @@ import type {
   OverlayOptions,
   TUI,
 } from "@earendil-works/pi-tui";
-import type { UIStyle } from "../../types.js";
+import type { UIStyle, ViewerStyle } from "../../types.js";
 import type { Theme } from "../agent-widget.js";
 
 export const MIN_VIEWPORT = 3;
@@ -95,6 +95,16 @@ export interface ConversationViewerOptions {
    * Defaults to "pi".
    */
   uiStyle?: UIStyle | (() => UIStyle);
+  /**
+   * Transcript rendering (the `viewerStyle` setting):
+   * - "chat": pi's main-screen message components — the same tree the main
+   *   window renders. The default.
+   * - "compact": the original flat transcript — `[User]` / `[Assistant]`
+   *   labels, dim thinking previews, capped tool output, `───` separators.
+   * A function is re-read on every render, so a settings change reaches an
+   * open viewer without recreating it.
+   */
+  viewerStyle?: ViewerStyle | (() => ViewerStyle);
   /**
    * Called for every key the viewer itself does not handle (after the composer,
    * which always wins while open). Return `true` to consume the key — this is

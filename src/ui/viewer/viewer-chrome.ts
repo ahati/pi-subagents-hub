@@ -3,7 +3,7 @@
  */
 
 import { renderAgentRecordName } from "../../agent-color.js";
-import type { AgentRecord, UIStyle } from "../../types.js";
+import type { AgentRecord, UIStyle, ViewerStyle } from "../../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../../usage.js";
 import type { AgentActivity, Theme } from "../agent-widget.js";
 import {
@@ -29,6 +29,11 @@ export function isFrameless(options?: ConversationViewerOptions): boolean {
 export function getUiStyle(options?: ConversationViewerOptions): UIStyle {
   const style = options?.uiStyle;
   return typeof style === "function" ? style() : (style ?? "pi");
+}
+
+export function getViewerStyleOption(options?: ConversationViewerOptions): ViewerStyle {
+  const style = options?.viewerStyle;
+  return typeof style === "function" ? style() : (style ?? "chat");
 }
 
 export function isFooterShown(options?: ConversationViewerOptions): boolean {

@@ -41,10 +41,16 @@ import {
   computeChromeLines,
   computeViewportHeight,
   getUiStyle,
+  getViewerStyleOption,
   isFooterShown,
   isFrameless,
   resolveIdentityBlock,
 } from "./viewer/viewer-chrome.js";
+import {
+  buildCompactTranscript,
+  type CompactRenderState,
+  createCompactRenderState,
+} from "./viewer/viewer-compact.js";
 import {
   buildTranscript,
   computeLastMessageSignature,
@@ -97,6 +103,7 @@ export class ConversationViewer implements Component, Focusable {
   private contentCache: { key: string; lines: string[] } | undefined;
   private contentDirty = true;
   private builtinRenderers: Record<string, ToolRenderers> | undefined;
+  private readonly compactState: CompactRenderState = createCompactRenderState();
 
   constructor(
     private tui: TUI,
@@ -560,32 +567,52 @@ export class ConversationViewer implements Component, Focusable {
   private buildContentLines(width: number): string[] {
     if (width <= 0) return [];
 
-    const key = `${width}|${this.record.status}|${this.session.messages.length}|${computeLastMessageSignature(this.session)}`;
+    const viewerStyle = getViewerStyleOption(this.options);
+    const key = `${width}|${viewerStyle}|${this.record.status}|${this.session.messages.length}|${computeLastMessageSignature(this.session)}`;
     if (!this.contentDirty && this.contentCache?.key === key) {
       return this.contentCache.lines;
     }
 
-    const build: TranscriptBuild = buildTranscript({
-      tui: this.tui,
-      session: this.session,
-      record: this.record,
-      activity: this.activity,
-      theme: this.theme,
-      markdownTheme: this.markdownTheme,
-      partials: this.partials,
-      builtinRenderers: this.builtinRenderers,
-      expanded: this.expanded,
-      invalidate: () => {
-        this.contentDirty = true;
-        this.tui.requestRender();
-      },
-      assistantComponents: this.assistantComponents,
-      toolComponents: this.toolComponentsByCall,
-      toolFeeds: this.toolFeeds,
-    });
-    this.toolComponents = build.toolComponents;
-    this.bashComponents = build.bashComponents;
-    const lines = build.container.render(width).map(stripShellZones);
+    let lines: string[];
+    if (viewerStyle === "compact") {
+      lines = buildCompactTranscript(width, {
+        session: this.session,
+        record: this.record,
+        activity: this.activity,
+        theme: this.theme,
+        markdownTheme: this.markdownTheme,
+        partials: this.partials,
+        builtinRenderers: this.builtinRenderers,
+        expanded: this.expanded,
+        invalidate: () => {
+          this.contentDirty = true;
+          this.tui.requestRender();
+        },
+        state: this.compactState,
+      }).map(stripShellZones);
+    } else {
+      const build: TranscriptBuild = buildTranscript({
+        tui: this.tui,
+        session: this.session,
+        record: this.record,
+        activity: this.activity,
+        theme: this.theme,
+        markdownTheme: this.markdownTheme,
+        partials: this.partials,
+        builtinRenderers: this.builtinRenderers,
+        expanded: this.expanded,
+        invalidate: () => {
+          this.contentDirty = true;
+          this.tui.requestRender();
+        },
+        assistantComponents: this.assistantComponents,
+        toolComponents: this.toolComponentsByCall,
+        toolFeeds: this.toolFeeds,
+      });
+      this.toolComponents = build.toolComponents;
+      this.bashComponents = build.bashComponents;
+      lines = build.container.render(width).map(stripShellZones);
+    }
     this.contentCache = { key, lines };
     this.contentDirty = false;
     return lines;

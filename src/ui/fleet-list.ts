@@ -16,7 +16,7 @@
 import { isKeyRelease, Key, matchesKey, type ScrollViewScrollbar, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { hasAgentBadge, renderAgentRecordName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
-import type { AgentRecord, UIStyle } from "../types.js";
+import type { AgentRecord, UIStyle, ViewerStyle } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import type { WorkflowRunControls } from "./agent-hub.js";
 import { openAgentHub } from "./agent-hub.js";
@@ -157,6 +157,7 @@ export class FleetList {
      */
     private backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction,
     private uiStyle: () => UIStyle = () => "pi",
+    private viewerStyle: () => ViewerStyle = () => "chat",
   ) {}
 
   // ---- Lifecycle ----
@@ -540,6 +541,7 @@ export class FleetList {
         scrollbarMode: this.scrollbarMode,
         backgroundAction: this.backgroundAction,
         uiStyle: this.uiStyle,
+        viewerStyle: this.viewerStyle,
       },
       { agentId: initial.agentId, runId: initial.runId },
     ).finally(() => {

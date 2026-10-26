@@ -169,6 +169,15 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
   });
 
+  it("round-trips viewerStyle; keeps valid values, drops invalid", () => {
+    saveSettings({ viewerStyle: "compact" }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ viewerStyle: "compact" });
+    saveSettings({ viewerStyle: "chat" }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ viewerStyle: "chat" });
+    writeProject({ viewerStyle: "teletype" } as any);
+    expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
+  });
+
   it("round-trips outputTranscript; drops non-boolean", () => {
     saveSettings({ outputTranscript: false }, projectDir);
     expect(loadSettings(projectDir)).toEqual({ outputTranscript: false });
@@ -612,6 +621,7 @@ describe("settings persistence", () => {
         setPackageAgents: vi.fn(),
         setPackageWorkflows: vi.fn(),
         setUIStyle: vi.fn(),
+        setViewerStyle: vi.fn(),
       };
     });
 
@@ -742,6 +752,13 @@ describe("settings persistence", () => {
       expect(appliers.setUIStyle).toHaveBeenCalledWith("claude");
       applySettings({}, appliers);
       expect(appliers.setUIStyle).toHaveBeenCalledTimes(1); // absence is "use default"
+    });
+
+    it("applies viewerStyle; skips it when absent", () => {
+      applySettings({ viewerStyle: "compact" }, appliers);
+      expect(appliers.setViewerStyle).toHaveBeenCalledWith("compact");
+      applySettings({}, appliers);
+      expect(appliers.setViewerStyle).toHaveBeenCalledTimes(1); // absence is "use default"
     });
 
     it("applies fleetView (true and false); skips it when absent", () => {

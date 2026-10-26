@@ -65,7 +65,9 @@ layout arithmetic in a surface module.
   title itself: `╭ Agents & Workflows ─…─╮`.
 - **Three rules, three jobs**:
   1. the **quiet rule** `───` — exactly three dashes, dim, between transcript
-     blocks; content-level, never spanning a cell;
+     blocks; content-level, never spanning a cell. Only the compact transcript
+     style draws it (`viewerStyle: "compact"`); the chat style's components
+     are self-delimiting;
   2. the **header rule** — a full-cell rule directly under the right pane's
      header block (the cell's pad columns are the inset), separating identity
      from body;

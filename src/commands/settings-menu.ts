@@ -53,6 +53,7 @@ import type {
   AgentMentionMode,
   JoinMode,
   UIStyle,
+  ViewerStyle,
   WidgetMode,
 } from "../types.js";
 import type { AgentWidget } from "../ui/agent-widget.js";
@@ -82,6 +83,8 @@ export interface SettingsMenuDeps {
   setShowModel: (b: boolean) => void;
   getUIStyle: () => UIStyle;
   setUIStyle: (s: UIStyle) => void;
+  getViewerStyle: () => ViewerStyle;
+  setViewerStyle: (s: ViewerStyle) => void;
   isFleetViewEnabled: () => boolean;
   setFleetViewEnabled: (b: boolean) => void;
   getAgentMentionMode: () => AgentMentionMode;
@@ -127,6 +130,7 @@ export function snapshotSettings(deps: SettingsMenuDeps) {
     packageAgents: getPackageAgentsGate(),
     packageWorkflows: getPackageWorkflowsGate(),
     uiStyle: deps.getUIStyle(),
+    viewerStyle: deps.getViewerStyle(),
   } satisfies SubagentsSettings;
 }
 
@@ -184,6 +188,8 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
     setShowModel,
     getUIStyle,
     setUIStyle,
+    getViewerStyle,
+    setViewerStyle,
     isFleetViewEnabled,
     setFleetViewEnabled,
     getAgentMentionMode,
@@ -373,6 +379,14 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
         values: ["pi", "claude"],
       },
       {
+        id: "viewerStyle",
+        label: "Viewer style",
+        description:
+          "Conversation viewer transcript: chat = pi's main-screen message components, like main-chat output (default); compact = the original flat transcript with [User]/[Assistant] labels, dim thinking previews and capped tool output",
+        currentValue: getViewerStyle(),
+        values: ["chat", "compact"],
+      },
+      {
         id: "fleetView",
         label: "Fleet view",
         description: "Claude Code-style main+subagents list below the editor (↓/← to navigate, Enter to view)",
@@ -559,6 +573,9 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
     } else if (id === "uiStyle") {
       setUIStyle(value as UIStyle);
       notifyApplied(ctx, `UI style set to ${value}`, deps);
+    } else if (id === "viewerStyle") {
+      setViewerStyle(value as ViewerStyle);
+      notifyApplied(ctx, `Viewer style set to ${value}`, deps);
     } else if (id === "fleetView") {
       const enabled = value === "on";
       setFleetViewEnabled(enabled);

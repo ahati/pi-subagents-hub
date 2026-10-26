@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
-import type { AgentMentionMode, JoinMode, UIStyle, WidgetMode } from "./types.js";
+import type { AgentMentionMode, JoinMode, UIStyle, ViewerStyle, WidgetMode } from "./types.js";
 
 export type { UIStyle };
 
@@ -329,10 +329,21 @@ export interface SubagentsSettings {
   /**
    * UI appearance style:
    * - `pi`: native Pi styling (edge-to-edge horizontal borders, no outer vertical side rails, themed footer).
-   * - `claude`: Claude Code box styling (rounded corners `╭───╮`, outer `│` rails).
+   * - `claude`: Claude Code box styling (rounded corners `╭─╮`, outer `│` rails).
    * Defaults to `pi`.
    */
   uiStyle?: UIStyle;
+  /**
+   * How the conversation viewer renders a subagent transcript:
+   * - `chat` (default): pi's main-screen message components — the same tree the
+   *   main window renders, so transcripts look and stream like main-chat output.
+   * - `compact`: the original flat transcript — `[User]` / `[Assistant]` labels,
+   *   dim thinking previews, capped tool output, `───` separators.
+   *
+   * Read at render time via a getter, so toggling applies to an open viewer
+   * without recreating it.
+   */
+  viewerStyle?: ViewerStyle;
 }
 
 export type ToolDescriptionMode = "full" | "compact" | "custom";
@@ -363,6 +374,7 @@ export interface SettingsAppliers {
   setShowCost: (b: boolean) => void;
   setShowModel: (b: boolean) => void;
   setUIStyle: (style: UIStyle) => void;
+  setViewerStyle: (style: ViewerStyle) => void;
   setPackageAgents: (gate: boolean | string[]) => void;
   setPackageWorkflows: (gate: boolean | string[]) => void;
 }
@@ -375,6 +387,7 @@ const VALID_TOOL_DESCRIPTION_MODES: ReadonlySet<string> = new Set<ToolDescriptio
 const VALID_WIDGET_MODES: ReadonlySet<string> = new Set<WidgetMode>(["all", "background", "off"]);
 const VALID_AGENT_MENTION_MODES: ReadonlySet<string> = new Set<AgentMentionMode>(["model", "direct", "off"]);
 const VALID_UI_STYLES: ReadonlySet<string> = new Set<UIStyle>(["pi", "claude"]);
+const VALID_VIEWER_STYLES: ReadonlySet<string> = new Set<ViewerStyle>(["chat", "compact"]);
 
 // Sanity ceilings — prevent hand-edited configs from asking for values that
 // make no operational sense (e.g. 1e6 concurrent subagents). Permissive enough
@@ -500,6 +513,9 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (typeof r.uiStyle === "string" && VALID_UI_STYLES.has(r.uiStyle)) {
     out.uiStyle = r.uiStyle as UIStyle;
   }
+  if (typeof r.viewerStyle === "string" && VALID_VIEWER_STYLES.has(r.viewerStyle)) {
+    out.viewerStyle = r.viewerStyle as ViewerStyle;
+  }
   if (typeof r.workflowsEnabled === "boolean") {
     out.workflowsEnabled = r.workflowsEnabled;
   }
@@ -592,6 +608,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.showCost === "boolean") appliers.setShowCost(s.showCost);
   if (typeof s.showModel === "boolean") appliers.setShowModel(s.showModel);
   if (s.uiStyle) appliers.setUIStyle(s.uiStyle);
+  if (s.viewerStyle) appliers.setViewerStyle(s.viewerStyle);
   if (typeof s.workflowsEnabled === "boolean") appliers.setWorkflowsEnabled(s.workflowsEnabled);
   if (s.packageAgents !== undefined) appliers.setPackageAgents(s.packageAgents);
   if (s.packageWorkflows !== undefined) appliers.setPackageWorkflows(s.packageWorkflows);

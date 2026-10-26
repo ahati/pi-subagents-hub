@@ -793,6 +793,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
         frameless: () => true,
         onUnhandledKey: data => pageUnhandledKey(this, data),
         uiStyle: () => this.effectiveStyle(),
+        viewerStyle: () => this.deps.viewerStyle?.() ?? "chat",
       },
     );
     return this.viewer;
