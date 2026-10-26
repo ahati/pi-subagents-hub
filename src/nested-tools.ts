@@ -25,10 +25,11 @@ import {
   streamToOutputFile,
   writeInitialEntry,
 } from "./output-file.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+import { formatAnswerSteer, formatQuestionCard, getForegroundOutcomeNote, getStatusNote, openQuestionsFooter, partialOutputSuffix } from "./status-note.js";
 import type {
   AgentConfig,
   AgentInvocation,
+  AgentQuestion,
   AgentRecord,
   IsolationMode,
   ThinkingLevel,
@@ -47,7 +48,7 @@ let maxSubagentDepth = 2;
 export function getMaxSubagentDepth(): number { return maxSubagentDepth; }
 export function setMaxSubagentDepth(n: number): void { maxSubagentDepth = Math.max(0, Math.floor(n)); }
 
-const NESTED_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent"] as const;
+const NESTED_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent", "ask_parent", "answer_subagent"] as const;
 
 interface NestedSpawnOptions {
   description: string;
@@ -113,6 +114,33 @@ function ownsRecord(record: AgentRecord | undefined, parentAgentId: string): rec
 }
 
 /**
+ * Who can actually answer this child's question, computed rather than assumed:
+ * the nearest ancestor whose run is live AND whose own caller is not blocked in
+ * a `spawnAndWait` — a blocked ancestor takes its next turn only after this
+ * child settles, so addressing it would promise a mid-run answer that cannot
+ * happen (upstream #410's core defect). The chain ends at a top-level agent
+ * (`parentAgentId === undefined`), whose owner is the main session.
+ *
+ * `chainBlocked` on the root result says whether the main session can only
+ * take its turn after this run settles — because the chain climbed through
+ * blocked owners, or because this child is itself a foreground run the root
+ * is blocked on. The tool text must not promise a mid-run answer then.
+ */
+function resolveAnswerer(manager: NestedAgentManager, child: AgentRecord): { kind: "agent"; record: AgentRecord } | { kind: "root"; chainBlocked: boolean } {
+  const seen = new Set<string>();
+  let climbedBlocked = false;
+  for (let id = child.parentAgentId; id !== undefined && !seen.has(id); ) {
+    seen.add(id);
+    const owner = manager.getRecord(id);
+    if (!owner) break;
+    if (owner.status === "running" && !owner.blocking) return { kind: "agent", record: owner };
+    climbedBlocked = true;
+    id = owner.parentAgentId;
+  }
+  return { kind: "root", chainBlocked: climbedBlocked || child.blocking === true };
+}
+
+/**
  * How the caller received this record, which decides the outcome wording.
  *
  *   - "inline": a foreground spawn or a resume. The full output is in this very
@@ -139,7 +167,12 @@ function formatRecord(record: AgentRecord, position: ResultPosition): string {
   const note = position === "inline"
     ? getForegroundOutcomeNote(record.status)
     : getStatusNote(record.status);
-  return note ? `Nested agent${note}.\n\n${text}` : text;
+  const noted = note ? `Nested agent${note}.\n\n${text}` : text;
+  // Unanswered questions ride the result as a footer — the safety net when no
+  // answerer reached the child mid-run. Formatted at read time, never merged
+  // into record.result (same reason structuredJson is kept separate).
+  const footer = openQuestionsFooter(record);
+  return footer ? `${noted}\n\n${footer}` : noted;
 }
 
 /** Build child-safe orchestration tools scoped to one parent agent instance. */
@@ -422,5 +455,177 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
     },
   });
 
-  return [agentTool, resultTool, steerTool];
+  return [agentTool, resultTool, steerTool, ...createAskAnswerTools({
+    manager: context.manager,
+    pi: context.pi,
+    parentAgentId: context.parentAgentId,
+  })];
+}
+
+/** Everything the ask/answer tools need — an owner and the bus, nothing else. */
+export interface AskAnswerContext {
+  manager: NestedAgentManager;
+  pi: ExtensionAPI;
+  /** This session's own record id — what its children carry as parentAgentId. */
+  parentAgentId: string;
+}
+
+/**
+ * ask_parent + answer_subagent, on their own. Asking needs an owner, never
+ * delegation headroom, so this pair is injected into EVERY non-isolated
+ * subagent at any depth — with or without an allowlist — while the delegation
+ * tools above stay behind the allowedSubagents and depth-cap gates.
+ */
+export function createAskAnswerTools(context: AskAnswerContext): ToolDefinition[] {
+  /**
+   * The child asks its owner a question and, in mailbox mode, keeps working on
+   * its stated assumption. Never blocks: a blocked child holds a concurrency
+   * slot and an owner's attention; suspension (`block: true`) lands with the
+   * pause-gate work and is refused for now.
+   */
+  const askTool = defineTool({
+    name: NESTED_TOOL_NAMES[3],
+    label: "Ask Parent",
+    description:
+      "Ask your parent agent for a decision or fact you cannot resolve yourself. " +
+      "The question is delivered to your parent (or the main session) and you CONTINUE WORKING on your stated assumption; " +
+      "the answer arrives later as a steering message. Ask at most one open question at a time — asking again supersedes the previous one.",
+    parameters: Type.Object({
+      question: Type.String({ description: "The specific decision or fact you need." }),
+      context: Type.Optional(Type.String({ description: "What you tried and why you cannot resolve it yourself." })),
+      assumption: Type.Optional(Type.String({ description: "What you will do if no answer arrives. State it so your parent can correct course cheaply." })),
+      block: Type.Optional(Type.Boolean({ description: "Not supported yet — suspension is refused. Ask without it." })),
+    }),
+    execute: async (_toolCallId, params) => {
+      // The suite is built per child session; `parentAgentId` in the context is
+      // THIS session's own record id (its children carry it as their parent).
+      const self = context.manager.getRecord(context.parentAgentId);
+      if (!self) return textResult("Agent record not found; the question cannot be routed.", true);
+      if (params.block) {
+        return textResult("Suspension is not available yet — ask without block and continue on your stated assumption.", true);
+      }
+
+      const open = (self.questions ?? []).filter(q => q.state === "open" || q.state === "delivered");
+      for (const q of open) q.state = "superseded";
+      const q: AgentQuestion = {
+        id: `q-${(self.questions?.length ?? 0) + 1}`,
+        question: params.question,
+        ...(params.context !== undefined ? { context: params.context } : {}),
+        ...(params.assumption !== undefined ? { assumption: params.assumption } : {}),
+        mode: "mailbox",
+        state: "open",
+        askedAt: Date.now(),
+      };
+      if (!self.questions) self.questions = [];
+      self.questions.push(q);
+
+      const card = formatQuestionCard(self, q);
+      const answerer = resolveAnswerer(context.manager, self);
+      if (answerer.kind === "agent") {
+        const owner = answerer.record;
+        // Mark delivered before the await: an owner that answers within the
+        // steer's resolution window must not be clobbered back to delivered.
+        q.state = "delivered";
+        q.deliveredTo = owner.id;
+        try {
+          if (!owner.session) {
+            owner.pendingSteers = [...(owner.pendingSteers ?? []), card];
+          } else {
+            await owner.session.steer(card);
+          }
+        } catch {
+          // Undeliverable right now: the question stays on the record and the
+          // result-time footer still surfaces it to whoever reads the result.
+          q.state = "open";
+          q.deliveredTo = undefined;
+          return textResult(`Question ${q.id} recorded but could not be delivered mid-run; it will ride your result. Continue on your stated assumption.`);
+        }
+        const delivery = owner.blocking
+          ? "your parent is mid-task, so the answer may only arrive at its next turn or with your result"
+          : "the answer will reach you mid-run as a steering message";
+        const superseded = open.length > 0 ? ` Supersedes ${open.map(x => x.id).join(", ")}.` : "";
+        return textResult(`Question ${q.id} delivered to your parent agent (${owner.type} "${owner.description}").${superseded} Continue on your stated assumption — ${delivery}.`);
+      }
+
+      // Owner chain dead or fully blocked: the main session answers. Sent as a
+      // steer that triggers a turn when idle; if the root turn is aborted the
+      // message is lost, and the result-time footer remains the safety net.
+      // Mark delivered before the send, same anti-clobber order as above.
+      q.state = "delivered";
+      q.deliveredTo = "root";
+      try {
+        context.pi.sendMessage(
+          { customType: "subagent-question", content: card, display: true },
+          { deliverAs: "steer", triggerTurn: true },
+        );
+      } catch {
+        q.state = "open";
+        q.deliveredTo = undefined;
+        return textResult(`Question ${q.id} recorded but could not be delivered; it will ride your result. Continue on your stated assumption.`);
+      }
+      const rootDelivery = answerer.chainBlocked
+        ? "the main session is waiting on this run, so expect the answer only with your result — finish cleanly"
+        : "the answer will reach you as a steering message, or rides your result if the run ends first";
+      return textResult(`Question ${q.id} delivered to the main session. Continue on your stated assumption — ${rootDelivery}.`);
+    },
+  });
+
+  /** The owner answers one of its children's open questions. */
+  const answerTool = defineTool({
+    name: NESTED_TOOL_NAMES[4],
+    label: "Answer Nested Agent",
+    description: "Answer a question one of your nested agents asked via ask_parent. The answer is delivered to the (still running) agent as a steering message.",
+    parameters: Type.Object({
+      agent_id: Type.String({ description: "The asking agent's ID, from the question card." }),
+      question_id: Type.Optional(Type.String({ description: "Defaults to the agent's oldest open question." })),
+      answer: Type.String({ description: "The decision or fact the agent asked for." }),
+    }),
+    execute: async (_toolCallId, params) => {
+      const record = context.manager.getRecord(params.agent_id);
+      const qs = record?.questions ?? [];
+      const q = params.question_id
+        ? qs.find(x => x.id === params.question_id)
+        : qs.find(x => x.state === "open" || x.state === "delivered") ?? qs[qs.length - 1];
+      // The direct owner answers its own child's question — and so does any
+      // session the card was routed to: resolveAnswerer skips blocked owners,
+      // so the card may legitimately land on a grandparent rather than the
+      // child's own `parentAgentId`.
+      const routed = q !== undefined && q.deliveredTo === context.parentAgentId;
+      if (!record || (!ownsRecord(record, context.parentAgentId) && !routed)) {
+        return textResult(`Nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
+      }
+      if (!q || (q.state !== "open" && q.state !== "delivered")) {
+        const closed = !q ? ""
+          : q.state === "superseded" ? ` — it was superseded by a later ask`
+          : q.state === "dropped" ? ` — it was dropped when the run ended in failure or was aborted; it asked: "${q.question}"`
+          : ` — its state is ${q.state}`;
+        return textResult(`No open question${params.question_id ? ` "${params.question_id}"` : ""} on agent ${params.agent_id}${closed}.`, true);
+      }
+      if (record.status !== "running" && record.status !== "queued") {
+        return textResult(`Agent ${params.agent_id} already finished (${record.status}); the question rode its result. Resume it with the answer instead.`, true);
+      }
+      const priorState = q.state;
+      q.state = "answered";
+      q.answer = params.answer;
+      q.answeredBy = context.parentAgentId;
+      const message = formatAnswerSteer(q);
+      try {
+        if (!record.session) {
+          record.pendingSteers = [...(record.pendingSteers ?? []), message];
+        } else {
+          await record.session.steer(message);
+        }
+      } catch (err) {
+        // Delivery failed: un-answer, so the question stays open for a retry
+        // instead of silently vanishing behind a state the child never saw.
+        q.state = priorState;
+        q.answer = undefined;
+        q.answeredBy = undefined;
+        return textResult(`Failed to deliver the answer to agent ${params.agent_id}: ${err instanceof Error ? err.message : String(err)}`, true);
+      }
+      return textResult(`Answer to ${q.id} delivered to agent ${params.agent_id}.`);
+    },
+  });
+
+  return [askTool, answerTool];
 }

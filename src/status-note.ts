@@ -8,7 +8,7 @@
  * through agent-runner).
  */
 
-import type { AgentRecord } from "./types.js";
+import type { AgentQuestion, AgentRecord } from "./types.js";
 
 /**
  * Explicit parenthetical note for a non-normal terminal outcome, so the parent
@@ -87,4 +87,41 @@ export function getForegroundOutcomeNote(status: string): string {
 export function partialOutputSuffix(record: AgentRecord): string {
   const partial = record.result?.trim();
   return partial ? `\n\nPartial output before the failure:\n${partial}` : "";
+}
+
+/**
+ * The question card steered to an answerer — a nested owner's session or the
+ * root session. Fixed headers, never child-authored prose markers: the
+ * recipient must be able to tell a question from the child's own output, and
+ * the `answer_subagent` invocation line is the only reply path named.
+ */
+export function formatQuestionCard(child: AgentRecord, q: AgentQuestion): string {
+  const lines = [
+    `[SUBAGENT QUESTION] ${child.type} "${child.description}" (agent id: ${child.id}, question ${q.id})`,
+    `Q: ${q.question}`,
+  ];
+  if (q.context) lines.push(`Context: ${q.context}`);
+  if (q.assumption) lines.push(`Child will proceed with: ${q.assumption}`);
+  lines.push(`Reply with answer_subagent(agent_id: "${child.id}", question_id: "${q.id}", answer: "...").`);
+  return lines.join("\n");
+}
+
+/** The answer steered back into the asking child. */
+export function formatAnswerSteer(q: AgentQuestion): string {
+  return `[ANSWER to your ask_parent ${q.id}] ${q.answer}\nContinue with this answer; do not re-ask the same question.`;
+}
+
+/**
+ * Result-time footer for questions the child finished without an answer — the
+ * safety net when no answerer reached it mid-run (a blocked owner chain, an
+ * unread card, an aborted root turn). Formatted from the questions field at
+ * read time, never stored into `result`; empty when there is nothing to ask.
+ */
+export function openQuestionsFooter(record: AgentRecord): string {
+  const open = record.questions?.filter(q => q.state === "open" || q.state === "delivered");
+  if (!open?.length) return "";
+  return open.map(q => {
+    const assumption = q.assumption ? `otherwise it proceeded with: ${q.assumption}.` : "otherwise it proceeded on its own judgment.";
+    return `[QUESTION for you, question ${q.id}] ${q.question}\nThis agent finished without an answer. Resume it with the answer if it matters; ${assumption}`;
+  }).join("\n\n");
 }

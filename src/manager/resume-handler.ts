@@ -43,6 +43,14 @@ export function settleOutcome(
       record.status = steered ? "steered" : "completed";
     }
   }
+  // A run that settles as an abort or failure takes its open ask_parent
+  // questions with it: nobody answers a dead run, and the error surfaces must
+  // not dangle a footer for questions that will never be resolved.
+  if (aborted || failure) {
+    for (const q of record.questions ?? []) {
+      if (q.state === "open" || q.state === "delivered") q.state = "dropped";
+    }
+  }
   record.result = text;
   record.completedAt ??= Date.now();
 }
@@ -51,6 +59,9 @@ export function failResume(record: AgentRecord, err: unknown): void {
   if (!externallyHalted(record)) {
     record.status = "error";
     record.error = err instanceof Error ? err.message : String(err);
+  }
+  for (const q of record.questions ?? []) {
+    if (q.state === "open" || q.state === "delivered") q.state = "dropped";
   }
   record.completedAt ??= Date.now();
 }

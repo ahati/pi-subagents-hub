@@ -124,6 +124,10 @@ vi.mock("../src/nested-tools.js", () => ({
     { name: "get_subagent_result" },
     { name: "steer_subagent" },
   ]),
+  createAskAnswerTools: vi.fn(() => [
+    { name: "ask_parent" },
+    { name: "answer_subagent" },
+  ]),
 }));
 
 import {
@@ -800,7 +804,7 @@ import {
   getConfig,
   getToolNamesForType,
 } from "../src/agent-types.js";
-import { createNestedSubagentTools } from "../src/nested-tools.js";
+import { createAskAnswerTools, createNestedSubagentTools } from "../src/nested-tools.js";
 
 const BUILTINS_7 = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
@@ -1112,7 +1116,7 @@ describe("agent-runner master tool allowlist", () => {
     expect(tools).toContain("ok_ext");
   });
 
-  it("keeps nested tools unavailable without explicit opt-in", async () => {
+  it("keeps delegation tools unavailable without explicit opt-in — the ask suite stays", async () => {
     vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
     vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: false }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
@@ -1126,7 +1130,11 @@ describe("agent-runner master tool allowlist", () => {
 
     expect(createNestedSubagentTools).not.toHaveBeenCalled();
     expect(lastToolsPassed()).not.toContain("Agent");
-    expect(createAgentSession.mock.calls[0][0].customTools).toEqual([]);
+    // Asking needs only an owner: every non-isolated subagent gets the pair.
+    expect(createAgentSession.mock.calls[0][0].customTools).toEqual([
+      { name: "ask_parent" },
+      { name: "answer_subagent" },
+    ]);
   });
 
   it("injects scoped nested tools for an opted-in non-isolated agent", async () => {
@@ -1155,7 +1163,12 @@ describe("agent-runner master tool allowlist", () => {
     expect(lastToolsPassed()).toEqual(expect.arrayContaining([
       "Agent", "get_subagent_result", "steer_subagent",
     ]));
-    expect(createAgentSession.mock.calls[0][0].customTools).toHaveLength(3);
+    // The delegation trio plus the always-on ask pair.
+    expect(createAgentSession.mock.calls[0][0].customTools).toHaveLength(5);
+    expect(createAskAnswerTools).toHaveBeenCalledWith(expect.objectContaining({
+      manager,
+      parentAgentId: "parent",
+    }));
   });
 
   it("keeps opt-in nested tools active UNDER EXTENSIONS despite the EXCLUDED-name collision", async () => {
@@ -1179,7 +1192,7 @@ describe("agent-runner master tool allowlist", () => {
     const opts = createAgentSession.mock.calls[0][0];
     // (a) not denied at the registry gate, and passed as customTools.
     expect(opts.excludeTools ?? []).not.toContain("Agent");
-    expect(opts.customTools).toHaveLength(3);
+    expect(opts.customTools).toHaveLength(5);
     // (b) survive the active-set renarrow alongside a real extension tool.
     const active = lastToolsPassed();
     expect(active).toEqual(expect.arrayContaining(["Agent", "get_subagent_result", "steer_subagent"]));

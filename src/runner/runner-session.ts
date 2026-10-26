@@ -26,6 +26,7 @@ import { DEFAULT_AGENTS } from "../default-agents.js";
 import { detectEnv } from "../env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "../memory.js";
 import {
+  createAskAnswerTools,
   createNestedSubagentTools,
   getMaxSubagentDepth,
 } from "../nested-tools.js";
@@ -293,7 +294,18 @@ export async function runAgent(
         configCwd,
       })
     : [];
-  const nestedToolNames = new Set(nestedTools.map((tool: any) => tool.name));
+  // ask_parent/answer_subagent need only an owner, never delegation headroom:
+  // every non-isolated subagent gets them, at any depth, with or without an
+  // allowlist — unless its own disallowedTools names them. Only when the full
+  // delegation suite is present are they already inside nestedTools.
+  const askTools = options.nestedRuntime && !isolated && !nestedTools.some((tool: any) => tool.name === "ask_parent")
+    ? createAskAnswerTools({
+        manager: options.nestedRuntime.manager,
+        pi: options.pi,
+        parentAgentId: options.nestedRuntime.parentAgentId,
+      })
+    : [];
+  const nestedToolNames = new Set([...nestedTools, ...askTools].map((tool: any) => tool.name));
 
   const structuredCapture = options.structuredOutput ? createStructuredCapture() : undefined;
   const structuredTools = options.structuredOutput && structuredCapture
@@ -356,7 +368,7 @@ export async function runAgent(
     ...(parentModelRuntime !== undefined && { modelRuntime: parentModelRuntime as never }),
     model,
     tools: sessionTools,
-    customTools: [...nestedTools, ...structuredTools],
+    customTools: [...nestedTools, ...askTools, ...structuredTools],
     resourceLoader: loader,
   };
   if (sessionExcludeTools) {

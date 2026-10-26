@@ -162,6 +162,40 @@ export type MentionResolution =
 /** Which concurrency pool a run is charged to. */
 export type Pool = "background" | "foreground";
 
+/**
+ * Lifecycle of one question a nested child asked its owner (`ask_parent`).
+ *
+ * `open` → `delivered` once the question card reached an answerer (a steer into
+ * a nested owner, or a message into the root session). `answered` when the
+ * owner's `answer_subagent` call landed. `superseded` when the child asked
+ * again, `expired` when a suspended ask timed out, `dropped` when the run
+ * settled without one — error, abort, or the owner chain dying.
+ */
+export type QuestionState = "open" | "delivered" | "answered" | "superseded" | "expired" | "dropped";
+
+export interface AgentQuestion {
+  /** Unique within the asking record: `q-1`, `q-2`, … */
+  id: string;
+  question: string;
+  /** What the child tried and why it cannot resolve this itself. */
+  context?: string;
+  /** What the child does unless an answer arrives (mailbox mode). */
+  assumption?: string;
+  mode: "mailbox" | "block";
+  state: QuestionState;
+  askedAt: number;
+  answer?: string;
+  /** Record id of the answering agent, `"root"` (main session), or `"user"`. */
+  answeredBy?: string;
+  /**
+   * The session the question card was delivered to: a record id, or `"root"`
+   * for the main session. That session — not only the child's direct owner —
+   * is entitled to answer: routing skips blocked ancestors, so the card may
+   * land higher up the chain than `parentAgentId`.
+   */
+  deliveredTo?: string;
+}
+
 export interface AgentRecord {
   id: string;
   type: SubagentType;
@@ -238,6 +272,8 @@ export interface AgentRecord {
   resultConsumed?: boolean;
   /** Steering messages queued before the session was ready. */
   pendingSteers?: string[];
+  /** Questions this child has asked its owner via `ask_parent`, oldest first. */
+  questions?: AgentQuestion[];
   /** Worktree info if the agent is running in an isolated worktree. */
   worktree?: { path: string; branch: string; baseSha: string; workPath: string };
   /** Worktree cleanup result after agent completion. */

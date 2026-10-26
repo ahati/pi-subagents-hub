@@ -6,7 +6,7 @@ import { isTopLevelAgent } from "../agent-manager.js";
 import { getAgentConversation, SUBAGENT_TOOL_NAMES, steerAgent } from "../agent-runner.js";
 import { type CompletionOutbox, NOTIFICATION_HOLD_MS } from "../completion-outbox.js";
 import { formatLifetimeTokens, markdownText, textResult } from "../entry/renderers.js";
-import { getStatusNote, partialOutputSuffix } from "../status-note.js";
+import { formatAnswerSteer, getStatusNote, openQuestionsFooter, partialOutputSuffix } from "../status-note.js";
 import type { AgentRecord } from "../types.js";
 import { formatCost, formatDuration, getDisplayName } from "../ui/agent-widget.js";
 import { getLifetimeCost, getSessionContextPercent, type PendingUsagePool } from "../usage.js";
@@ -112,6 +112,12 @@ export function createGetResultTool(deps: InspectToolsDeps) {
       } else {
         body = record.result?.trim() || "No output.";
       }
+      // Unanswered ask_parent questions ride the result — same footer the nested
+      // inline path gets; answered/superseded/dropped ones never appear. The
+      // footer joins details.body too, so the rendered output matches what the
+      // model reads.
+      const footer = record.status !== "running" && record.status !== "queued" ? openQuestionsFooter(record) : "";
+      if (footer) body = `${body}\n\n${footer}`;
 
       if (record.status !== "running" && record.status !== "queued") {
         record.resultConsumed = true;
@@ -202,6 +208,71 @@ export function createSteerTool(deps: InspectToolsDeps) {
       } catch (err) {
         return textResult(`Failed to steer agent: ${err instanceof Error ? err.message : String(err)}`);
       }
+    },
+  });
+}
+
+export function createAnswerTool(deps: InspectToolsDeps) {
+  const { resolveAgentRef } = deps;
+
+  return defineTool({
+    name: SUBAGENT_TOOL_NAMES.ANSWER,
+    label: "Answer Agent",
+    description:
+      "Answer a question one of your background agents asked via ask_parent. The answer is delivered to the (still running) agent as a steering message; " +
+      "if the agent already finished, resume it with the answer instead.",
+    promptSnippet: "Answer a background agent's clarification question",
+    parameters: Type.Object({
+      agent_id: Type.String({
+        description: "The asking agent's ID, from the question card. The agent's handle also works.",
+      }),
+      question_id: Type.Optional(
+        Type.String({ description: "Which question to answer. Defaults to the agent's oldest open question." }),
+      ),
+      answer: Type.String({ description: "The decision or fact the agent asked for." }),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      const record = resolveAgentRef(params.agent_id);
+      const qs = record?.questions ?? [];
+      const q = params.question_id
+        ? qs.find(x => x.id === params.question_id)
+        : qs.find(x => x.state === "open" || x.state === "delivered") ?? qs[qs.length - 1];
+      // Top-level children answer directly; a nested child whose question was
+      // routed all the way up the (blocked) chain to the main session is
+      // answerable here too — delivery entitles, not just direct ownership.
+      const routed = q !== undefined && q.deliveredTo === "root";
+      if (!record || (!isTopLevelAgent(record) && !routed)) {
+        return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
+      }
+      if (!q || (q.state !== "open" && q.state !== "delivered")) {
+        const closed = !q ? ""
+          : q.state === "superseded" ? ` — it was superseded by a later ask`
+          : q.state === "dropped" ? ` — it was dropped when the run ended in failure or was aborted; it asked: "${q.question}"`
+          : ` — its state is ${q.state}`;
+        return textResult(`No open question${params.question_id ? ` "${params.question_id}"` : ""} on agent ${params.agent_id}${closed}.`);
+      }
+      if (record.status !== "running" && record.status !== "queued") {
+        return textResult(`Agent ${params.agent_id} already finished (${record.status}); the question rode its result. Resume it with the answer instead.`);
+      }
+      const priorState = q.state;
+      q.state = "answered";
+      q.answer = params.answer;
+      q.answeredBy = "root";
+      const message = formatAnswerSteer(q);
+      try {
+        if (!record.session) {
+          record.pendingSteers = [...(record.pendingSteers ?? []), message];
+        } else {
+          await steerAgent(record.session, message);
+        }
+      } catch (err) {
+        // Delivery failed: un-answer so the question stays open for a retry.
+        q.state = priorState;
+        q.answer = undefined;
+        q.answeredBy = undefined;
+        return textResult(`Failed to deliver the answer to agent ${params.agent_id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return textResult(`Answer to ${q.id} delivered to agent ${params.agent_id}.`);
     },
   });
 }

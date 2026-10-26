@@ -97,6 +97,7 @@ import {
 } from "./settings.js";
 import { createAgentTool } from "./tools/agent-tool.js";
 import {
+  createAnswerTool,
   createGetResultTool,
   createSteerTool,
   registerToolReportingUsage,
@@ -510,6 +511,13 @@ export default function (pi: ExtensionAPI) {
   }), () => reportUsage, pendingUsage);
 
   registerToolReportingUsage(pi, createSteerTool({
+    resolveAgentRef,
+    isShowCostEnabled,
+    outbox,
+    pi,
+  }), () => reportUsage, pendingUsage);
+
+  registerToolReportingUsage(pi, createAnswerTool({
     resolveAgentRef,
     isShowCostEnabled,
     outbox,
