@@ -334,6 +334,8 @@ describe("AgentManager — pause / unpause", () => {
     await manager.getRecord(d.id)!.promise;
 
     const stale = Date.now() - 11 * 60_000;
+    // Only a consumed result is evicted by the retention timer.
+    manager.getRecord(d.id)!.resultConsumed = true;
     manager.getRecord(p.id)!.completedAt = stale;
     manager.getRecord(d.id)!.completedAt = stale;
     (manager as any).cleanup();

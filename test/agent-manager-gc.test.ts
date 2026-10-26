@@ -54,7 +54,11 @@ describe("AgentManager — record GC", () => {
     manager ??= new AgentManager();
     const id = manager.spawn(mockPi, mockCtx, "X", prompt, { description: prompt, isBackground: true });
     await manager.getRecord(id)!.promise;
-    return { id, record: manager.getRecord(id)! };
+    // A consumed result is what the retention window bounds — see the
+    // retention test below for the unconsumed counterpart.
+    const record = manager.getRecord(id)!;
+    record.resultConsumed = true;
+    return { id, record };
   }
 
   it("keeps a record that completed inside the retention window", async () => {
@@ -80,6 +84,26 @@ describe("AgentManager — record GC", () => {
 
     expect(manager.getRecord(id)).toBeUndefined();
     expect(manager.listAgents().map(a => a.id)).not.toContain(id);
+    expect(dispose).toHaveBeenCalled();
+  });
+
+  it("retains an unconsumed stale result until it is consumed", async () => {
+    // The timer bounds memory after a result is read. Evicting one the model
+    // has not retrieved yet would throw the answer away unread.
+    manager = new AgentManager();
+    const { id, record } = await settled("unread");
+    const dispose = vi.fn();
+    record.session = { dispose } as any;
+    record.resultConsumed = false;
+    record.completedAt = Date.now() - (TEN_MINUTES + 30_000);
+
+    await vi.advanceTimersByTimeAsync(TICK);
+    expect(manager.getRecord(id)).toBeDefined();
+    expect(dispose).not.toHaveBeenCalled();
+
+    record.resultConsumed = true;
+    await vi.advanceTimersByTimeAsync(TICK);
+    expect(manager.getRecord(id)).toBeUndefined();
     expect(dispose).toHaveBeenCalled();
   });
 
@@ -178,6 +202,7 @@ describe("AgentManager — tombstones outliving the GC", () => {
     const id = manager.spawn(mockPi, mockCtx, type, prompt, { description: prompt, isBackground: true });
     const record = manager.getRecord(id)!;
     await record.promise;
+    record.resultConsumed = true;
     record.sessionFile = sessionFile;
     record.completedAt = Date.now() - (TEN_MINUTES + 30_000);
     return { id, record };

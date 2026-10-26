@@ -136,7 +136,8 @@ export type AgentMentionMode = 'model' | 'direct' | 'off';
 
 /**
  * What survives a record's eviction so `@handle` keeps working. The live record
- * is discarded after ~10 minutes, but the pi session it wrote is still on disk,
+ * is discarded only ~10 minutes after completion and once its result was
+ * consumed, but the pi session it wrote is still on disk,
  * and this is the little that is needed to find and describe it again.
  */
 export interface AgentTombstone {
@@ -233,7 +234,7 @@ export interface AgentRecord {
   startGate?: Promise<void>;
   groupId?: string;
   joinMode?: JoinMode;
-  /** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
+  /** Set when result was already consumed via get_subagent_result — suppresses completion notification; the GC sweep only evicts consumed records. */
   resultConsumed?: boolean;
   /** Steering messages queued before the session was ready. */
   pendingSteers?: string[];

@@ -1014,6 +1014,8 @@ describe("resuming an evicted agent by name", () => {
   async function evict(id: string) {
     const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
     const record = manager.getRecord(id);
+    // Only a consumed result is evicted by the retention timer.
+    record.resultConsumed = true;
     record.sessionFile = sessionPath();
     writeFileSync(record.sessionFile, "");
     record.completedAt = Date.now() - 11 * 60_000;

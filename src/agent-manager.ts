@@ -597,6 +597,9 @@ export class AgentManager {
     for (const [id, record] of this.registry.agents) {
       if (record.status === "running" || record.status === "queued" || record.status === "paused") continue;
       if ((record.completedAt ?? 0) >= cutoff) continue;
+      // Retain unconsumed results: the timer bounds memory after a result is
+      // read, it does not expire a result the model has not retrieved yet.
+      if (!record.resultConsumed) continue;
       this.removeRecord(id, record);
     }
   }

@@ -295,6 +295,8 @@ describe("/agents revive", () => {
     await flush();
     const id = /Agent ID: (\S+)/.exec(textOf(r))![1];
     const record = manager().getRecord(id);
+    // Only a consumed result is evicted by the retention timer.
+    record.resultConsumed = true;
     record.sessionFile = join(process.cwd(), `${id}-session.jsonl`);
     writeFileSync(record.sessionFile, "");
     record.completedAt = Date.now() - 11 * 60_000;
