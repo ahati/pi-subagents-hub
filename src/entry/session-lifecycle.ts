@@ -199,7 +199,13 @@ export function registerSessionLifecycle(
             const record = manager.getRecord(id);
             const activeCtx = getCurrentCtx();
             if (!record || !activeCtx) return Promise.resolve(false);
-            return resumeAgentById(activeCtx, record, prompt);
+            if (record.session) return resumeAgentById(activeCtx, record, prompt);
+            // A gate-paused run whose session has not appeared yet (the spawn
+            // reply resolves at "running", onSessionCreated lands after) can
+            // never go through unpause — it was never queued. The manager's
+            // gate reopen is the only path that reaches it; for every other
+            // sessionless record it degrades to unpause's own semantics.
+            return manager.resume(id, prompt).then(resumed => resumed !== undefined);
           },
           consumeResult: (id) => {
             const record = resolveAgentRef(id);
