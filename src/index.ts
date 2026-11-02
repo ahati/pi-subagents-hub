@@ -24,6 +24,7 @@ import {
   setDefaultMaxTurns,
   setGraceTurns,
   setRememberAgents,
+  setUncutPromptProviders,
 } from "./agent-runner.js";
 import {
   getAgentConfig,
@@ -427,6 +428,7 @@ export default function (pi: ExtensionAPI) {
       setShowModel,
       setPackageAgents: setPackageAgentsGate,
       setPackageWorkflows: setPackageWorkflowsGate,
+      setUncutPromptProviders,
       setUIStyle,
       setViewerStyle,
     },

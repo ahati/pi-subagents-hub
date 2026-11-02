@@ -393,6 +393,43 @@ describe("agent-runner final output capture", () => {
     expect(createAgentSession.mock.calls[0][0]).not.toHaveProperty("modelRuntime");
   });
 
+  it("passes uncut parent system prompt to buildAgentPrompt for uncutPromptProviders", async () => {
+    const { buildAgentPrompt, inheritableParentPrompt } = await import("../src/prompts.js");
+    const { setUncutPromptProviders, DEFAULT_UNCUT_PROMPT_PROVIDERS } = await import("../src/runner/runner-settings.js");
+    setUncutPromptProviders(DEFAULT_UNCUT_PROMPT_PROVIDERS);
+
+    const { session } = createSession("RAW");
+    createAgentSession.mockResolvedValue({ session });
+
+    vi.mocked(inheritableParentPrompt).mockClear();
+    vi.mocked(buildAgentPrompt).mockClear();
+
+    // 1. claude-bridge model -> passes uncut prompt, does not call inheritableParentPrompt
+    const bridgeModel = { provider: "claude-bridge", id: "claude-sonnet-4" } as any;
+    await runAgent(ctx, "Explore", "task", { pi, model: bridgeModel });
+    expect(inheritableParentPrompt).not.toHaveBeenCalled();
+    expect(vi.mocked(buildAgentPrompt).mock.lastCall![3]).toBe("parent prompt");
+
+    // 2. native model (e.g. anthropic) -> calls inheritableParentPrompt
+    vi.mocked(inheritableParentPrompt).mockClear();
+    vi.mocked(buildAgentPrompt).mockClear();
+    const nativeModel = { provider: "anthropic", id: "claude-3-5-sonnet" } as any;
+    await runAgent(ctx, "Explore", "task", { pi, model: nativeModel });
+    expect(inheritableParentPrompt).toHaveBeenCalledWith("parent prompt", "/tmp");
+
+    // 3. custom provider configured in uncutPromptProviders
+    setUncutPromptProviders(["custom-bridge"]);
+    vi.mocked(inheritableParentPrompt).mockClear();
+    vi.mocked(buildAgentPrompt).mockClear();
+    const customModel = { provider: "custom-bridge", id: "custom-1" } as any;
+    await runAgent(ctx, "Explore", "task", { pi, model: customModel });
+    expect(inheritableParentPrompt).not.toHaveBeenCalled();
+    expect(vi.mocked(buildAgentPrompt).mock.lastCall![3]).toBe("parent prompt");
+
+    // Reset back to defaults
+    setUncutPromptProviders(DEFAULT_UNCUT_PROMPT_PROVIDERS);
+  });
+
   it("suppresses AGENTS.md/CLAUDE.md/APPEND_SYSTEM.md for subagents", async () => {
     const { session } = createSession("ISOLATED");
     createAgentSession.mockResolvedValue({ session });

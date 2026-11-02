@@ -81,4 +81,9 @@ describe("documented defaults (README:441)", () => {
     const { isScopeModelsEnabled } = await import("../src/model-scope.js");
     expect(isScopeModelsEnabled()).toBe(false);
   });
+
+  it("uncutPromptProviders defaults to claude-bridge", async () => {
+    const { getUncutPromptProviders } = await import("../src/runner/runner-settings.js");
+    expect([...getUncutPromptProviders()]).toEqual(["claude-bridge"]);
+  });
 });

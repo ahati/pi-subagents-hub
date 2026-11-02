@@ -10,6 +10,7 @@ check the entries below for behaviour changes.
 ## [Unreleased]
 
 ### Fixed
+- **Subagents on `pi-claude-bridge` models launch without prompt-capture harness refusals** (fixes [#6](https://github.com/ahati/pi-subagents-hub/issues/6) — thanks [@mixedcase](https://github.com/mixedcase)). Append-mode subagents running on `claude-bridge` models inherit the parent prompt uncut so the bridge can recognize the parent's assembled prompt and substitute its portable parts, preventing Claude Code harness-leakage refusals in both normal and isolated runs. Configurable via `uncutPromptProviders` in `subagents.json` (defaults to `["claude-bridge"]`); native providers continue to receive the stripped prompt to prevent duplicate skills and cwd sections.
 - **A package's name alias covers directory-style `pi.extensions` declarations** (ported from [tintinweb/pi-subagents#426](https://github.com/tintinweb/pi-subagents/pull/426) — thanks [@LuLuyu](https://github.com/LuLuyu)). A declaration such as `"./dist"` only produced the package alias when the loader registered exactly that directory; loaded from a file inside it — `extensions: ["…/dist/index.js"]`, a symlink to that file, or pi resolving the directory to its index — `extensions: [pkg-name]` and `ext: pkg-name` matched nothing, leaving only the path-derived name. Every file under a declared directory now answers to the package alias too; path-derived names keep working, and the separator in the prefix test keeps `dist-v2` from matching `"./dist"`.
 
 ## [2026.11.011] - 2026-11-01

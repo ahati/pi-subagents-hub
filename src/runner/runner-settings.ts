@@ -47,6 +47,35 @@ export function getGraceTurns(): number { return graceTurns; }
 export function setGraceTurns(n: number): void { graceTurns = Math.max(1, n); }
 
 /**
+ * Default providers whose subagents inherit the uncut parent system prompt.
+ * Bridge providers (such as claude-bridge) rely on matching the parent's
+ * exact assembled prompt to project it into portable parts without harness leakage.
+ */
+export const DEFAULT_UNCUT_PROMPT_PROVIDERS: readonly string[] = ["claude-bridge"];
+
+let uncutPromptProviders = new Set<string>(DEFAULT_UNCUT_PROMPT_PROVIDERS);
+
+/** Providers configured to inherit the uncut parent system prompt. */
+export function getUncutPromptProviders(): ReadonlySet<string> {
+  return uncutPromptProviders;
+}
+
+/** Set the providers that receive the uncut parent system prompt. */
+export function setUncutPromptProviders(providers: readonly string[]): void {
+  uncutPromptProviders = new Set(providers.map((p) => p.trim()).filter(Boolean));
+}
+
+/** Check whether a provider receives the uncut parent prompt. */
+export function isUncutPromptProvider(provider?: string): boolean {
+  if (!provider) return false;
+  const target = provider.toLowerCase();
+  for (const p of uncutPromptProviders) {
+    if (p.toLowerCase() === target) return true;
+  }
+  return false;
+}
+
+/**
  * Try to find the right model for an agent type.
  * Priority: explicit option > config.model > parent model.
  */

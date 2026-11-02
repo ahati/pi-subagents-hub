@@ -346,6 +346,18 @@ export interface SubagentsSettings {
    * without recreating it.
    */
   viewerStyle?: ViewerStyle;
+  /**
+   * Model providers whose append-mode subagents should inherit the uncut parent system
+   * prompt (e.g. bridge providers like `claude-bridge` that require matching the parent's
+   * exact assembled prompt to project it into another harness without harness leakage).
+   *
+   * For providers in this list, `ctx.getSystemPrompt()` is passed uncut. All other
+   * providers receive `inheritableParentPrompt` (skills and cwd sections stripped so
+   * the child session does not duplicate them).
+   *
+   * Defaults to `["claude-bridge"]`. Set to `[]` to force stripped prompts for all providers.
+   */
+  uncutPromptProviders?: string[];
 }
 
 export type ToolDescriptionMode = "full" | "compact" | "custom";
@@ -379,6 +391,7 @@ export interface SettingsAppliers {
   setViewerStyle: (style: ViewerStyle) => void;
   setPackageAgents: (gate: boolean | string[]) => void;
   setPackageWorkflows: (gate: boolean | string[]) => void;
+  setUncutPromptProviders: (providers: string[]) => void;
 }
 
 /** Emit callback — a subset of `pi.events.emit` to keep helpers testable. */
@@ -525,6 +538,14 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (packageAgents !== undefined) out.packageAgents = packageAgents;
   const packageWorkflows = sanitizePackageGate(r.packageWorkflows);
   if (packageWorkflows !== undefined) out.packageWorkflows = packageWorkflows;
+  if (Array.isArray(r.uncutPromptProviders)) {
+    out.uncutPromptProviders = r.uncutPromptProviders
+      .filter((e): e is string => typeof e === "string")
+      .map((e) => e.trim())
+      .filter(Boolean);
+  } else if (typeof r.uncutPromptProviders === "string") {
+    out.uncutPromptProviders = r.uncutPromptProviders.trim() ? [r.uncutPromptProviders.trim()] : [];
+  }
   if (r.fallbackSubagent === false) {
     // The only non-string spelling worth accepting: a boolean would otherwise be
     // dropped, silently leaving the PERMISSIVE default in place. Every string is
@@ -614,6 +635,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.workflowsEnabled === "boolean") appliers.setWorkflowsEnabled(s.workflowsEnabled);
   if (s.packageAgents !== undefined) appliers.setPackageAgents(s.packageAgents);
   if (s.packageWorkflows !== undefined) appliers.setPackageWorkflows(s.packageWorkflows);
+  if (s.uncutPromptProviders !== undefined) appliers.setUncutPromptProviders(s.uncutPromptProviders);
 }
 
 /**

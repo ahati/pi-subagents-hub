@@ -546,6 +546,20 @@ describe("settings persistence", () => {
       writeProject({ maxConcurrent: 1_000_000, defaultMaxTurns: 1_000_000, graceTurns: 1_000_000 });
       expect(loadSettings(projectDir)).toEqual({});
     });
+
+    it("sanitizes uncutPromptProviders to string array, trimming entries and dropping non-strings", () => {
+      writeProject({ uncutPromptProviders: [" claude-bridge ", "", 42, "other-bridge "] });
+      expect(loadSettings(projectDir).uncutPromptProviders).toEqual(["claude-bridge", "other-bridge"]);
+
+      writeProject({ uncutPromptProviders: "single-bridge" });
+      expect(loadSettings(projectDir).uncutPromptProviders).toEqual(["single-bridge"]);
+
+      writeProject({ uncutPromptProviders: [] });
+      expect(loadSettings(projectDir).uncutPromptProviders).toEqual([]);
+
+      writeProject({ uncutPromptProviders: 123 });
+      expect(loadSettings(projectDir).uncutPromptProviders).toBeUndefined();
+    });
   });
 
   describe("save result + corrupt-file warning", () => {
@@ -620,6 +634,7 @@ describe("settings persistence", () => {
         setShowModel: vi.fn(),
         setPackageAgents: vi.fn(),
         setPackageWorkflows: vi.fn(),
+        setUncutPromptProviders: vi.fn(),
         setUIStyle: vi.fn(),
         setViewerStyle: vi.fn(),
       };
@@ -670,6 +685,18 @@ describe("settings persistence", () => {
 
       applySettings({ showModel: false }, appliers);
       expect(appliers.setShowModel).toHaveBeenCalledWith(false);
+    });
+
+    it("applies uncutPromptProviders, including an empty list", () => {
+      applySettings({ uncutPromptProviders: ["claude-bridge", "custom"] }, appliers);
+      expect(appliers.setUncutPromptProviders).toHaveBeenCalledWith(["claude-bridge", "custom"]);
+
+      applySettings({ uncutPromptProviders: [] }, appliers);
+      expect(appliers.setUncutPromptProviders).toHaveBeenCalledWith([]);
+
+      vi.mocked(appliers.setUncutPromptProviders).mockClear();
+      applySettings({}, appliers);
+      expect(appliers.setUncutPromptProviders).not.toHaveBeenCalled();
     });
 
     it("is a no-op on an empty settings object", () => {
@@ -898,6 +925,7 @@ describe("settings persistence", () => {
         setShowModel: vi.fn(),
         setPackageAgents: vi.fn(),
         setPackageWorkflows: vi.fn(),
+        setUncutPromptProviders: vi.fn(),
       };
     });
 

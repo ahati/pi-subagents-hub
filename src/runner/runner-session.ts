@@ -58,6 +58,7 @@ import {
 } from "./runner-helpers.js";
 import {
   getRememberAgents,
+  isUncutPromptProvider,
   resolveDefaultModel,
   resolveEffectiveMaxTurns,
 } from "./runner-settings.js";
@@ -105,9 +106,45 @@ export async function runAgent(
 
   const env = await detectEnv(options.pi, effectiveCwd);
 
-  // Get parent system prompt for append-mode agents, without the sections the
-  // child session renders itself (skills, cwd, extension sections).
-  const parentSystemPrompt = inheritableParentPrompt(ctx.getSystemPrompt(), ctx.cwd);
+  const agentDir = getAgentDir();
+  const projectTrusted = ctx.isProjectTrusted();
+  const settingsManager = SettingsManager.create(configCwd, agentDir, { projectTrusted });
+
+  let model = options.model ?? resolveDefaultModel(
+    ctx.model, ctx.modelRegistry, agentConfig?.model,
+  );
+  if (!options.model && !agentConfig?.model) {
+    const defaultModel = settingsManager.getDefaultModel?.();
+    if (defaultModel) {
+      const provider = settingsManager.getDefaultProvider?.() ?? ctx.model?.provider ?? "";
+      const found = ctx.modelRegistry.find(provider, defaultModel);
+      if (found) model = found;
+    }
+  }
+
+  if (!options.model && agentConfig?.model && resolveDefaultModel(undefined, ctx.modelRegistry, agentConfig.model) === undefined) {
+    const slashIdx = agentConfig.model.indexOf("/");
+    const notFound = slashIdx === -1
+      || !ctx.modelRegistry.find(agentConfig.model.slice(0, slashIdx), agentConfig.model.slice(slashIdx + 1));
+    options.onToolActivity?.({
+      type: "warning",
+      toolName: `model-error:model "${agentConfig.model}" pinned by agent "${type}" is ${notFound ? "not a known model" : "unavailable (provider not authenticated or model disabled)"} — running on the parent model instead`,
+    });
+  }
+
+  // Get parent system prompt for append-mode agents. For bridge providers that
+  // re-home the prompt into another harness (like claude-bridge), the bridge relies
+  // on matching the parent's full assembled prompt verbatim to project it into
+  // portable parts without harness leakage. For all other providers, strip the
+  // sections the child session renders itself (skills, cwd, extension sections).
+  // Get parent system prompt for append-mode agents. For bridge providers that
+  // re-home the prompt into another harness (like claude-bridge), the bridge relies
+  // on matching the parent's full assembled prompt verbatim to project it into
+  // portable parts without harness leakage. For all other providers, strip the
+  // sections the child session renders itself (skills, cwd, extension sections).
+  const parentSystemPrompt = isUncutPromptProvider(model?.provider)
+    ? ctx.getSystemPrompt()
+    : inheritableParentPrompt(ctx.getSystemPrompt(), ctx.cwd);
 
   const extras: PromptExtras = {};
   if (options.worktreeBase) extras.worktreeBase = options.worktreeBase;
@@ -154,7 +191,6 @@ export async function runAgent(
   }
 
   const noSkills = skills === false || Array.isArray(skills);
-  const agentDir = getAgentDir();
 
   const { extNames, narrowing } = parseExtSelectors(
     isolated ? [] : (agentConfig?.extSelectors ?? []),
@@ -187,8 +223,6 @@ export async function runAgent(
           };
         };
 
-  const projectTrusted = ctx.isProjectTrusted();
-  const settingsManager = SettingsManager.create(configCwd, agentDir, { projectTrusted });
   const sessionSettingsManager =
     resolve(effectiveCwd) === resolve(configCwd)
       ? settingsManager
@@ -278,28 +312,6 @@ export async function runAgent(
     options.onToolActivity?.({
       type: "end",
       toolName: `tools-error:${mcpToolPatterns.join(", ")} requested by agent "${type}" need extensions, but it loads none`,
-    });
-  }
-
-  let model = options.model ?? resolveDefaultModel(
-    ctx.model, ctx.modelRegistry, agentConfig?.model,
-  );
-  if (!options.model && !agentConfig?.model) {
-    const defaultModel = settingsManager.getDefaultModel?.();
-    if (defaultModel) {
-      const provider = settingsManager.getDefaultProvider?.() ?? ctx.model?.provider ?? "";
-      const found = ctx.modelRegistry.find(provider, defaultModel);
-      if (found) model = found;
-    }
-  }
-
-  if (!options.model && agentConfig?.model && resolveDefaultModel(undefined, ctx.modelRegistry, agentConfig.model) === undefined) {
-    const slashIdx = agentConfig.model.indexOf("/");
-    const notFound = slashIdx === -1
-      || !ctx.modelRegistry.find(agentConfig.model.slice(0, slashIdx), agentConfig.model.slice(slashIdx + 1));
-    options.onToolActivity?.({
-      type: "warning",
-      toolName: `model-error:model "${agentConfig.model}" pinned by agent "${type}" is ${notFound ? "not a known model" : "unavailable (provider not authenticated or model disabled)"} — running on the parent model instead`,
     });
   }
 

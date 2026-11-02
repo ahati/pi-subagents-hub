@@ -14,6 +14,7 @@ import {
   getDefaultMaxTurns,
   getGraceTurns,
   getRememberAgents,
+  getUncutPromptProviders,
   setDefaultMaxTurns,
   setGraceTurns,
   setRememberAgents,
@@ -129,6 +130,7 @@ export function snapshotSettings(deps: SettingsMenuDeps) {
     showModel: deps.isShowModelEnabled(),
     packageAgents: getPackageAgentsGate(),
     packageWorkflows: getPackageWorkflowsGate(),
+    uncutPromptProviders: [...getUncutPromptProviders()],
     uiStyle: deps.getUIStyle(),
     viewerStyle: deps.getViewerStyle(),
   } satisfies SubagentsSettings;

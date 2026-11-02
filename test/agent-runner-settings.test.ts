@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  DEFAULT_UNCUT_PROMPT_PROVIDERS,
   getDefaultMaxTurns,
   getGraceTurns,
+  getUncutPromptProviders,
+  isUncutPromptProvider,
   normalizeMaxTurns,
   setDefaultMaxTurns,
   setGraceTurns,
+  setUncutPromptProviders,
 } from "../src/agent-runner.js";
 
 describe("setDefaultMaxTurns / getDefaultMaxTurns", () => {
@@ -92,5 +96,30 @@ describe("setGraceTurns / getGraceTurns", () => {
   it("clamps negative values to 1", () => {
     setGraceTurns(-5);
     expect(getGraceTurns()).toBe(1);
+  });
+});
+
+describe("uncutPromptProviders", () => {
+  beforeEach(() => {
+    setUncutPromptProviders(DEFAULT_UNCUT_PROMPT_PROVIDERS);
+  });
+
+  it("defaults to claude-bridge", () => {
+    expect(DEFAULT_UNCUT_PROMPT_PROVIDERS).toEqual(["claude-bridge"]);
+    expect(isUncutPromptProvider("claude-bridge")).toBe(true);
+    expect(isUncutPromptProvider("CLAUDE-BRIDGE")).toBe(true);
+    expect(isUncutPromptProvider("anthropic")).toBe(false);
+    expect(isUncutPromptProvider(undefined)).toBe(false);
+  });
+
+  it("updates and trims provider list via setUncutPromptProviders", () => {
+    setUncutPromptProviders([" custom-bridge ", "other-bridge"]);
+    expect(getUncutPromptProviders().has("custom-bridge")).toBe(true);
+    expect(isUncutPromptProvider("custom-bridge")).toBe(true);
+    expect(isUncutPromptProvider("claude-bridge")).toBe(false);
+
+    setUncutPromptProviders([]);
+    expect(isUncutPromptProvider("claude-bridge")).toBe(false);
+    expect(getUncutPromptProviders().size).toBe(0);
   });
 });
