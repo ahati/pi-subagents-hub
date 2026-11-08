@@ -179,12 +179,22 @@ next to the project: one JSON file holding the parked subagent rows (each with
 its handle and alias, plus either its session file or a respawn recipe — the
 original prompt and the invocation fields the live record held at pause time),
 the main turn's parked flag with
-its pending-call count, a liveness claim (pid + time) so two pi windows
-cannot double-run a park, and timestamps. The manifest is rewritten
-atomically on every state change and every rewrite **preserves** fields it
-does not own — a rewrite can never erase a parked main turn. Reads fall back
-to scanning the park directory, so the manifest is found even when the
-session is resumed from a different working directory.
+its pending-call count, a liveness claim (pid + time), and timestamps. The
+manifest is rewritten atomically on every state change and every rewrite
+**preserves** fields it does not own — a rewrite can never erase a parked main
+turn. Reads fall back to scanning the park directory, so the manifest is found
+even when the session is resumed from a different working directory.
+
+Cross-restart `/continue` also acquires a per-manifest
+`<session>.json.continue-lock`. Exclusive file creation (`open(..., "wx")`)
+is the atomic decision point, so this lock does not require hard-link support.
+The owner record includes a random token, preventing one activation from
+releasing another activation's lock even when they share a process ID. A
+contender with a live owner is reported as busy; a malformed or partially
+written lock fails closed and reports its path. A stale owner is reclaimed
+only after its PID is confirmed absent. The lock is held for the whole shadow
+continuation and released on success or failure. The manifest directory must
+support exclusive file creation and deletion.
 
 The pending tool calls themselves are never duplicated into the manifest:
 the transcript already holds them, and the transcript is the source of
@@ -220,7 +230,7 @@ through the real tool pipeline (validation, hooks and events intact), appends
 their results, and issues the bare continuation request — the full
 conversation, no new message. When the turn settles, `/continue` points pi's
 own session-switch at the same file, so the live interface reloads and
-displays the continued transcript. A liveness claim guards the whole
+displays the continued transcript. The manifest PID claim and atomic per-manifest lock guard the whole
 operation; a refusal is always visible and retryable.
 
 The shadow runs with a deliberately minimal tool surface: built-in tools
@@ -299,6 +309,16 @@ real sessions and the real resume flow.
 
 ## 7. Known limitations
 
+- If the process crashes while it owns the short-lived `.continue-lock.recovery` marker
+  used to serialize stale-lock cleanup, and a stale main-turn lock remains beside
+  it, `/continue` fails closed and reports the marker path. After confirming the
+  recorded PID is no longer running, remove that `.recovery` file and retry; the
+  main-turn lock itself is reclaimed automatically when its owner PID is gone.
+- PID checks cannot distinguish the original owner from an unrelated process that
+  later reuses the same PID. In that rare case the lock is reported as busy.
+  Verify the process and session before manually removing the lock; there is
+  deliberately no age-based lease because a long-running continuation must not
+  be stolen.
 - The continued main turn after a restart runs in a shadow session and is
   adopted via a session switch: the interface shows a reload, and input
   typed during the continuation lands as a sibling branch afterwards.

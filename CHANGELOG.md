@@ -10,6 +10,7 @@ check the entries below for behaviour changes.
 ## [Unreleased]
 
 ### Fixed
+- **Serialize cross-restart `/continue` without requiring hard links**. A per-session exclusive lock protects the parked main-turn continuation, distinguishes busy from unreadable locks with an actionable path, releases safely after success or failure, and is cleaned up with orphaned manifests. The supported Pi peer-dependency floor is now 1.5.0, matching the runtime API used and tested by this release.
 - **Reject symlinked parent directories for project and local agent memory**. `resolveMemoryDir` now validates that neither `.pi` nor the memory root is a symlink, preventing repositories from redirecting persistent agent memory reads and writes outside the project root ([#431](https://github.com/tintinweb/pi-subagents/pull/431) — thanks [@Zeng-Zer](https://github.com/Zeng-Zer)).
 - **Save settings to the global configuration file when the project has no local settings file**. Adjusting settings via `/agents → Settings` in a repository without `.pi/subagents.json` writes machine-wide defaults to `~/.pi/agent/subagents.json` instead of leaving an unwanted `.pi` directory in that repository ([#419](https://github.com/tintinweb/pi-subagents/pull/419) — thanks [@xh123637](https://github.com/xh123637)).
 

@@ -13,6 +13,7 @@ import { reopenTarget } from "../agent-record-entry.js";
 import { getDefaultMaxTurns, normalizeMaxTurns } from "../agent-runner.js";
 import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
 import { runInChildSessionContext } from "../child-context.js";
+import { MainTurnLock, withMainTurnLock } from "../main-turn-lock.js";
 import { getOutputTranscriptDefault } from "../output-file.js";
 import {
   type PausedAgentEntry,
@@ -29,6 +30,29 @@ import { pauseWorkflowTask, resumeWorkflowTask, type WorkflowTask } from "../wor
 import { type ParkGateController, recordName } from "./pause-state.js";
 
 const MANAGER_KEY = Symbol.for("pi-subagents:manager");
+const NO_MAIN_TURN_CLAIM_PID = -1;
+
+function resetManifestMainTurnClaim(store: PauseStore): void {
+  const latest = store.getMainTurn();
+  if (latest?.claim.pid !== process.pid) return;
+  store.setMainTurn({
+    ...latest,
+    claim: { pid: NO_MAIN_TURN_CLAIM_PID, at: new Date().toISOString() },
+  });
+}
+
+function notifySafely(
+  ctx: { ui: { notify(message: string, level: "info" | "warning"): void } },
+  message: string,
+  level: "info" | "warning",
+): void {
+  try {
+    ctx.ui.notify(message, level);
+  } catch {
+    // Session replacement invalidates the command context; recovery remains
+    // possible because the lock owner PID is checked on the next /continue.
+  }
+}
 
 export interface PauseContinueDeps {
   pi: ExtensionAPI;
@@ -110,9 +134,10 @@ export function syncPauseManifest(
   manager: AgentManager,
   workflowTasks?: ReadonlyMap<string, WorkflowTask>,
 ): void {
-  const sessionId = ctx.sessionManager?.getSessionId?.();
-  if (!sessionId) return;
   try {
+    // Context getters are guarded by pi and can throw after a session switch.
+    const sessionId = ctx.sessionManager?.getSessionId?.();
+    if (!sessionId) return;
     const store = new PauseStore(resolvePauseStorePath(ctx.cwd, sessionId));
     const previous = new Map(store.list().map(e => [e.id, e.pausedAt]));
     const entries: PausedAgentEntry[] = manager.listAgents()
@@ -365,17 +390,61 @@ export async function continuePausedCommand(
     park.flushHeldNudges();
   } else if (mainTurn?.parked) {
     if (park.claimLive(mainTurn.claim)) {
-      ctx.ui.notify(
+      notifySafely(
+        ctx,
         `Another pi window holds the claim on the parked main turn (pid ${mainTurn.claim.pid}) — continue there, or wait for it to exit.`,
         "warning",
       );
       return;
     }
-    store.setMainTurn({ ...mainTurn, claim: { pid: process.pid, at: new Date().toISOString() } });
-    const ok = await continueParkedMainTurn(ctx, store, revivable, deps);
-    if (ok) return;
+
+    const lock = new MainTurnLock(resolvePauseManifestPath(ctx.cwd, sessionId));
+    try {
+      const outcome = await withMainTurnLock(lock, async () => {
+        store.setMainTurn({ ...mainTurn, claim: { pid: process.pid, at: new Date().toISOString() } });
+        try {
+          const ok = await continueParkedMainTurn(ctx, store, revivable, deps);
+          if (!ok) resetManifestMainTurnClaim(store);
+          return ok;
+        } catch (error) {
+          try {
+            resetManifestMainTurnClaim(store);
+          } catch (resetError) {
+            throw new AggregateError(
+              [error, resetError],
+              "Parked main-turn continuation failed and its manifest claim could not be reset",
+            );
+          }
+          throw error;
+        }
+      });
+
+      if (outcome.status === "busy") {
+        notifySafely(
+          ctx,
+          `Another pi window is continuing this parked main turn (pid ${outcome.ownerPid}) — continue there, or retry after it exits.`,
+          "warning",
+        );
+        return;
+      }
+      if (outcome.status === "unreadable") {
+        notifySafely(
+          ctx,
+          `Cannot safely read the parked main-turn lock at ${outcome.path}. Verify no pi process is continuing this session, remove that lock file, and retry /continue.`,
+          "warning",
+        );
+        return;
+      }
+      if (outcome.value) return;
+    } catch (error) {
+      notifySafely(
+        ctx,
+        `Could not continue the parked main turn: ${error instanceof Error ? error.message : String(error)}`,
+        "warning",
+      );
+    }
     continuedMain = false;
-    ctx.ui.notify("Continuing the subagents only — the main turn could not be continued.", "warning");
+    notifySafely(ctx, "Continuing the subagents only — the main turn could not be continued.", "warning");
   }
 
   let resumed = 0;
@@ -568,14 +637,14 @@ export async function continueParkedMainTurn(
       park.mainTurnSwitchInProgress = false;
     }
     if (!adopted) {
-      const mainTurnRef = store.getMainTurn();
-      if (mainTurnRef) store.setMainTurn({ ...mainTurnRef, claim: { pid: -1, at: new Date().toISOString() } });
-      ctx.ui.notify("The parked main turn could not be adopted in this host — continuing the subagents only.", "warning");
+      resetManifestMainTurnClaim(store);
+      notifySafely(ctx, "The parked main turn could not be adopted in this host — continuing the subagents only.", "warning");
       return false;
     }
     return true;
   } catch (err) {
-    ctx.ui.notify(
+    notifySafely(
+      ctx,
       `Could not continue the parked main turn: ${err instanceof Error ? err.message : String(err)}`,
       "warning",
     );

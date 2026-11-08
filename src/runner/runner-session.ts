@@ -1168,7 +1168,10 @@ async function executeDurableAgentPrompt(
   const harness = await Harness.open(
     storage,
     {
-      models,
+      // pi-durable and pi-agent-core can resolve different pi-ai copies.
+      // TranscriptContext is branded, so their otherwise compatible Models
+      // registries are nominally distinct to TypeScript.
+      models: models as unknown as Parameters<typeof Harness.open>[1]["models"],
       registry,
       env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? effectiveCwd }),
     },

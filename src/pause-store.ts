@@ -20,12 +20,11 @@
  * an errored run) so a delivery after a restart reports the real status; both
  * fields are additive within manifest version 3 — absent means `completed`.
  *
- * Concurrency: writes are whole-file snapshots via temp+rename (POSIX
- * atomic), and every access re-reads from disk, so there is no cache to go
- * stale. There is deliberately no PID lock (unlike ScheduleStore): the store
- * has no timers, so the only cross-process scenario is two live pi instances
- * on the same session both running `/continue` — a double-revive hazard pi
- * itself has (`--resume` in two windows), not a corruption one.
+ * Concurrency: writes are whole-file snapshots via temp+rename, and every
+ * access re-reads from disk. Cross-restart main-turn continuation uses the
+ * separate MainTurnLock file beside this manifest; exclusive file creation is
+ * its atomic decision point. A dead owner is reclaimed only after its PID is
+ * confirmed absent, and unreadable lock records fail closed with their path.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -153,9 +152,10 @@ export function resolvePauseStorePath(cwd: string, sessionId: string): string {
  * as a fallback. `sessionExists` must also be total (a throw would abort the
  * sweep).
  *
- * Only whole manifest files are considered: `.json.tmp` snapshots and every
- * other name are left alone, and a manifest's contents are never parsed — a
- * corrupt file for a gone session is still garbage. Best effort throughout:
+ * Whole `.json` manifests are considered; when a manifest is removed,
+ * its `.continue-lock*` sidecars are removed with it. Other names (including
+ * `.json.tmp` snapshots) are left alone, and manifest contents are never
+ * parsed — a corrupt file for a gone session is still garbage. Best effort throughout:
  * an unreadable directory yields [], and a file that cannot be unlinked is
  * simply left behind. Only the canonical `pauseStoreDir(cwd)` is swept;
  * manifests that exist solely under a parent cwd (the
@@ -180,6 +180,20 @@ export function sweepOrphanPauseManifests(
     const id = name.slice(0, -5);
     if (id === "") continue;
     if (sessionExists(id)) continue;
+    // Clear sidecars before the manifest. If the process stops midway, the
+    // manifest remains and the next session_start can retry the cleanup.
+    const sidecarPrefix = `${name}.continue-lock`;
+    let sidecarsClean = true;
+    for (const sidecar of names) {
+      if (!sidecar.startsWith(sidecarPrefix)) continue;
+      try {
+        unlinkSync(join(dir, sidecar));
+      } catch {
+        sidecarsClean = false;
+      }
+    }
+    if (!sidecarsClean) continue;
+
     try {
       unlinkSync(join(dir, name));
       removed.push(id);

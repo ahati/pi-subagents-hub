@@ -363,6 +363,40 @@ describe("sweepOrphanPauseManifests", () => {
     expect(existsSync(join(dir, "dead.json"))).toBe(false);
   });
 
+  it("removes continuation-lock sidecars when their orphan manifest is swept", () => {
+    const dir = pauseDir();
+    mkdirSync(dir, { recursive: true });
+    const deadManifest = "dead.json";
+    const sidecars = [
+      `${deadManifest}.continue-lock`,
+      `${deadManifest}.continue-lock.recovery`,
+      `${deadManifest}.continue-lock.123.abc.tmp`,
+    ];
+    writeFileSync(join(dir, deadManifest), "{}");
+    for (const sidecar of sidecars) writeFileSync(join(dir, sidecar), "{}");
+
+    writeFileSync(join(dir, "live.json"), "{}");
+    writeFileSync(join(dir, "live.json.continue-lock"), "{}");
+
+    expect(sweep(dir, id => id === "live")).toEqual(["dead"]);
+    expect(existsSync(join(dir, deadManifest))).toBe(false);
+    for (const sidecar of sidecars) expect(existsSync(join(dir, sidecar))).toBe(false);
+    expect(existsSync(join(dir, "live.json.continue-lock"))).toBe(true);
+  });
+
+  it("keeps the orphan manifest when a lock sidecar cannot be removed", () => {
+    const dir = pauseDir();
+    mkdirSync(dir, { recursive: true });
+    const manifest = join(dir, "dead.json");
+    const blockedSidecar = join(dir, "dead.json.continue-lock");
+    writeFileSync(manifest, "{}");
+    mkdirSync(blockedSidecar);
+
+    expect(sweep(dir, () => false)).toEqual([]);
+    expect(existsSync(manifest)).toBe(true);
+    expect(existsSync(blockedSidecar)).toBe(true);
+  });
+
   it("pauseStoreDir names the canonical manifest directory", () => {
     const root = tempDir();
     expect(storeModule.pauseStoreDir(root)).toBe(join(root, ".pi", "subagent-pauses"));

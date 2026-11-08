@@ -9,6 +9,7 @@ import {
   PauseStore,
   resolvePauseStorePath,
 } from "../pause-store.js";
+import { processIsAlive } from "../process.js";
 import { countUnansweredToolCalls } from "../session-continue.js";
 import { getStatusNote } from "../status-note.js";
 import type { AgentRecord, NotificationDetails } from "../types.js";
@@ -159,15 +160,7 @@ export class ParkGateController {
   }
 
   claimLive(claim: { pid: number } | undefined): boolean {
-    if (!claim) return false;
-    if (claim.pid <= 0) return false;
-    if (claim.pid === process.pid) return true;
-    try {
-      process.kill(claim.pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
+    return claim !== undefined && processIsAlive(claim.pid);
   }
 
   async landPark(
