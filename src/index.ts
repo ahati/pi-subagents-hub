@@ -204,6 +204,9 @@ export default function (pi: ExtensionAPI) {
     }, { deliverAs: "steer", triggerTurn: true })),
     () => currentCtx?.signal !== undefined,
   );
+  // /continue owns delivery for captured results; drop the pending completion
+  // so an agent paused inside the outbox hold does not notify twice.
+  park.setCompletionCanceller(id => outbox.cancel(id));
 
   let defaultJoinMode: JoinMode = 'smart';
   function getDefaultJoinMode(): JoinMode { return defaultJoinMode; }

@@ -34,6 +34,7 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
+import { CompletionOutbox } from "../src/completion-outbox.js";
 import subagentsExtension from "../src/index.js";
 import { PauseStore, resolvePauseStorePath } from "../src/pause-store.js";
 import { type BootedPi, ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
@@ -425,6 +426,20 @@ describe("REPRO: completed-but-unconsumed results are captured by /pause and del
     const sends = vi.mocked(b.pi.sendMessage).mock.calls.slice(sendsBefore)
       .filter(c => (c[0] as any)?.customType === "subagent-notification");
     expect(sends).toEqual([]);
+  });
+
+  it("/pause cancels the pending completion notification for each captured result", async () => {
+    const b = boot(parentSm);
+    const idA = await spawnFinishedChild(b, join(hermetic!.dir, "child-a.jsonl"), "report A", "task A");
+    const idB = await spawnFinishedChild(b, join(hermetic!.dir, "child-b.jsonl"), "report B", "task B");
+    const cancel = vi.spyOn(CompletionOutbox.prototype, "cancel");
+
+    await b.commands.get("pause").handler("", parentCtx());
+    await flush();
+    const cancelled = cancel.mock.calls.map(c => c[0]);
+    cancel.mockRestore();
+
+    expect(cancelled).toEqual(expect.arrayContaining([idA, idB]));
   });
 
   it("/continue delivers the captured reports, clears the manifest, and revives nothing", async () => {

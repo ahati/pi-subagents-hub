@@ -258,7 +258,9 @@ run in the surviving (resumed) activation.
 consumed, as manifest rows. `/continue` delivers each captured result
 through the ordinary completion notification — from the live record in
 process, or by reading the final assistant report from the agent's session
-file after a restart — and marks it consumed. Already-consumed results are
+file after a restart — and marks it consumed. A completion notification
+still waiting in the outbox when `/pause` captures the result is canceled,
+so `/continue` is its only delivery path. Already-consumed results are
 never re-delivered. An agent parked exactly at a finished turn (final
 answer persisted, nothing pending) is delivered rather than revived: its
 report is the result. Each captured row carries the outcome its run settled
