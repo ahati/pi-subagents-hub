@@ -20,7 +20,7 @@ export type MainTurnLockResult =
 
 export type MainTurnLockExecutionResult<T> =
   | Exclude<MainTurnLockResult, { status: "acquired" }>
-  | { status: "completed"; value: T };
+  | { status: "completed"; value: T; releaseError?: unknown };
 
 /** Acquire, execute, and release a continuation as one testable lifecycle. */
 export async function withMainTurnLock<T>(
@@ -29,7 +29,7 @@ export async function withMainTurnLock<T>(
 ): Promise<MainTurnLockExecutionResult<T>> {
   let acquired: MainTurnLockResult;
   try {
-    acquired = lock.acquire();
+    acquired = await lock.acquire();
   } catch (error) {
     try {
       // acquire() can fail after installing the main lock if recovery-marker
@@ -59,7 +59,11 @@ export async function withMainTurnLock<T>(
     if (runFailed) {
       throw new AggregateError([runError, releaseError], "Continuation and lock release both failed");
     }
-    throw releaseError;
+    // The continuation itself completed. A lock that could not be removed is
+    // cleanup debt, not a failed turn: the next contender reclaims it once
+    // this PID exits. Report it so the caller can warn without re-running the
+    // already-adopted continuation.
+    return { status: "completed", value, releaseError };
   }
 
   if (runFailed) throw runError;
@@ -104,13 +108,27 @@ function readOwner(path: string): LockOwner | undefined {
  *
  * Exclusive file creation (`open(..., "wx")`) is the atomic decision point;
  * it works on filesystems that do not support hard links. The owner record is
- * written immediately after creation. A contender that observes the brief
- * empty-file window fails closed with the lock path, rather than stealing it.
+ * written immediately after creation. A contender that observes an incomplete
+ * record retries briefly before failing closed, because the writer holds the
+ * name only between `open` and `write` — reporting that window as a corrupt
+ * lock would tell the user to delete a lock another window is actively
+ * holding. A record that stays unreadable is reported with its path.
  *
  * Stale-owner reclamation is serialized with a second exclusive recovery file.
  * Recovery markers left by a crashed reaper are reported with their path for
- * manual cleanup after verifying the recorded PID is no longer active.
+ * manual cleanup after verifying the recorded PID is no longer active. When a
+ * reaper finishes and removes its marker between a contender's failed create
+ * and its read, the contender retries the acquisition instead of reporting a
+ * marker that no longer exists.
  */
+/** Read attempts cover the open-to-write window of the owner record. */
+const OWNER_READ_ATTEMPTS = 10;
+const OWNER_READ_RETRY_MS = 2;
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export class MainTurnLock {
   private readonly lockPath: string;
   private readonly recoveryPath: string;
@@ -124,7 +142,12 @@ export class MainTurnLock {
     this.recoveryPath = `${this.lockPath}.recovery`;
   }
 
-  acquire(): MainTurnLockResult {
+  /** The lock file this instance claims, for user-facing cleanup messages. */
+  get path(): string {
+    return this.lockPath;
+  }
+
+  async acquire(): Promise<MainTurnLockResult> {
     if (this.token) {
       throw new Error(`This MainTurnLock instance already owns ${this.lockPath}`);
     }
@@ -141,7 +164,7 @@ export class MainTurnLock {
       return { status: "acquired" };
     }
 
-    const current = readOwner(this.lockPath);
+    const current = await this.readOwnerRecord(this.lockPath);
     if (!current) {
       if (!existsSync(this.lockPath) && this.createExclusive(this.lockPath, owner)) {
         this.token = owner.token;
@@ -161,10 +184,16 @@ export class MainTurnLock {
     this.token = undefined;
   }
 
-  private reclaimStale(owner: LockOwner): MainTurnLockResult {
+  private async reclaimStale(owner: LockOwner): Promise<MainTurnLockResult> {
     if (!this.createExclusive(this.recoveryPath, owner)) {
-      const reaper = readOwner(this.recoveryPath);
-      if (!reaper) return { status: "unreadable", path: this.recoveryPath };
+      const reaper = await this.readOwnerRecord(this.recoveryPath);
+      if (!reaper) {
+        // The reaper finished and removed its marker between our create and
+        // read. Retry the ordinary acquisition instead of reporting a marker
+        // that no longer exists.
+        if (!existsSync(this.recoveryPath)) return this.acquire();
+        return { status: "unreadable", path: this.recoveryPath };
+      }
       if (this.isAlive(reaper.pid)) return { status: "busy", ownerPid: reaper.pid };
       return { status: "unreadable", path: this.recoveryPath };
     }
@@ -173,7 +202,7 @@ export class MainTurnLock {
       // Only one reaper can remove stale owners at a time. Fast-path claimants
       // may still race to create the vacant lock; exclusive creation picks one.
       for (;;) {
-        const current = readOwner(this.lockPath);
+        const current = await this.readOwnerRecord(this.lockPath);
         if (!current) {
           if (!existsSync(this.lockPath)) {
             if (this.createExclusive(this.lockPath, owner)) {
@@ -195,6 +224,22 @@ export class MainTurnLock {
     } finally {
       this.unlinkOwned(this.recoveryPath, owner.token);
     }
+  }
+
+  /**
+   * Read an owner record, tolerating the brief incomplete window between
+   * `open(..., "wx")` and its write. Returns `undefined` for an absent file
+   * immediately, and for a record that stayed unreadable after the retries.
+   * Callers distinguish the two with `existsSync`.
+   */
+  private async readOwnerRecord(path: string): Promise<LockOwner | undefined> {
+    for (let attempt = 0; attempt < OWNER_READ_ATTEMPTS; attempt++) {
+      const owner = readOwner(path);
+      if (owner) return owner;
+      if (!existsSync(path)) return undefined;
+      await delay(OWNER_READ_RETRY_MS);
+    }
+    return undefined;
   }
 
   private createExclusive(path: string, owner: LockOwner): boolean {

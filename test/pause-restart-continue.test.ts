@@ -53,6 +53,7 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { MainTurnLock } from "../src/main-turn-lock.js";
 import { PauseStore, resolvePauseStorePath } from "../src/pause-store.js";
 import { ctx, flush, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
 
@@ -690,6 +691,155 @@ describe("post-restart /continue wiring", () => {
     expect(onDisk?.mainTurn, "mainTurn must be cleared once the parked turn was continued").toBeUndefined();
     expect(onDisk?.entries ?? []).toEqual([]);
     expect(onDisk?.workflows ?? []).toEqual([]);
+  });
+
+  const DEAD_PID = 999_999_999;
+
+  function lockPath(): string {
+    return `${manifestPath()}.continue-lock`;
+  }
+
+  it("reports a live continuation lock as busy without touching the lock", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false } });
+    const mainSessionFile = seedMainSession(hermetic.dir);
+    seedManifest(parkedMainTurn(), []);
+    writeFileSync(lockPath(), JSON.stringify({ pid: process.pid, token: "live", at: ts }));
+
+    const b = bootOnly();
+    heldRevive();
+    const cmdCtx = continueCtx(mainSessionFile);
+    await b.commands.get("continue").handler("", cmdCtx);
+    await flush();
+
+    expect(cmdCtx.switchSession).not.toHaveBeenCalled();
+    const warnings = cmdCtx.ui.notify.mock.calls.filter((c: any[]) => c[1] === "warning");
+    expect(warnings.map((c: any[]) => String(c[0])).join(" ")).toMatch(/continuing this parked main turn/);
+    expect(existsSync(lockPath())).toBe(true);
+  });
+
+  it("reports an unreadable lock with its path and leaves it in place", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false } });
+    const mainSessionFile = seedMainSession(hermetic.dir);
+    seedManifest(parkedMainTurn(), []);
+    writeFileSync(lockPath(), "not-json");
+
+    const b = bootOnly();
+    heldRevive();
+    const cmdCtx = continueCtx(mainSessionFile);
+    await b.commands.get("continue").handler("", cmdCtx);
+    await flush();
+
+    expect(cmdCtx.switchSession).not.toHaveBeenCalled();
+    const warnings = cmdCtx.ui.notify.mock.calls.filter((c: any[]) => c[1] === "warning");
+    const text = warnings.map((c: any[]) => String(c[0])).join(" ");
+    expect(text).toMatch(/is unreadable/);
+    expect(text).toContain(lockPath());
+    expect(readFileSync(lockPath(), "utf-8")).toBe("not-json");
+  });
+
+  it("reclaims a dead continuation lock and removes it after the turn is continued", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false } });
+    const mainSessionFile = seedMainSession(hermetic.dir);
+    seedManifest(parkedMainTurn(), []);
+    writeFileSync(lockPath(), JSON.stringify({ pid: DEAD_PID, token: "stale", at: ts }));
+
+    const b = bootOnly();
+    heldRevive();
+    const cmdCtx = continueCtx(mainSessionFile);
+    await b.commands.get("continue").handler("", cmdCtx);
+    await flush();
+
+    expect(cmdCtx.switchSession).toHaveBeenCalled();
+    expect(existsSync(lockPath())).toBe(false);
+  });
+
+  it("holds the lock for the whole async switch callback", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false } });
+    const mainSessionFile = seedMainSession(hermetic.dir);
+    seedManifest(parkedMainTurn(), []);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let lockedDuringSwitch = false;
+
+    const b = bootOnly();
+    const cmdCtx = continueCtx(mainSessionFile, {
+      switchSession: vi.fn(async (_file: string, arg?: any) => {
+        lockedDuringSwitch = existsSync(lockPath());
+        await arg.withSession();
+        await held;
+      }),
+    });
+    const running = b.commands.get("continue").handler("", cmdCtx);
+    await flush();
+    expect(lockedDuringSwitch).toBe(true);
+    expect(existsSync(lockPath())).toBe(true);
+    release();
+    await running;
+    expect(existsSync(lockPath())).toBe(false);
+  });
+
+  it("releases the lock and resets the claim when the session switch fails before adoption", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false } });
+    const mainSessionFile = seedMainSession(hermetic.dir);
+    seedManifest(parkedMainTurn(), []);
+
+    const b = bootOnly();
+    const cmdCtx = continueCtx(mainSessionFile, {
+      switchSession: vi.fn(async () => { throw new Error("switch failed"); }),
+    });
+    await b.commands.get("continue").handler("", cmdCtx);
+    await flush();
+
+    expect(existsSync(lockPath())).toBe(false);
+    expect(manifestOnDisk()?.mainTurn?.claim?.pid).toBe(-1);
+  });
+
+  it("keeps the success result and does not re-revive when the lock cannot be released", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false } });
+    const mainSessionFile = seedMainSession(hermetic.dir);
+    const agentSessionFile = join(hermetic.dir, "agent-session.jsonl");
+    writeFileSync(agentSessionFile, "");
+    seedManifest(parkedMainTurn(), [entryFor(agentSessionFile)]);
+    const release = vi.spyOn(MainTurnLock.prototype, "release").mockImplementationOnce(() => {
+      throw new Error("EPERM: cannot unlink");
+    });
+
+    const b = bootOnly();
+    heldRevive();
+    const cmdCtx = continueCtx(mainSessionFile);
+    await b.commands.get("continue").handler("", cmdCtx);
+    await flush();
+    release.mockRestore();
+
+    expect(resumeCalls()).toBe(1);
+    const warnings = cmdCtx.ui.notify.mock.calls.filter((c: any[]) => c[1] === "warning").map((c: any[]) => String(c[0]));
+    const text = warnings.join(" ");
+    expect(text).toMatch(/could not be removed/);
+    expect(text).not.toMatch(/Continuing the subagents only/);
+    expect(manifestOnDisk()?.mainTurn).toBeUndefined();
+    expect(manifestOnDisk()?.entries ?? []).toEqual([]);
+  });
+
+  it("does not re-revive through the stale context when the session was adopted before a failure", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false } });
+    const mainSessionFile = seedMainSession(hermetic.dir);
+    const agentSessionFile = join(hermetic.dir, "agent-session.jsonl");
+    writeFileSync(agentSessionFile, "");
+    seedManifest(parkedMainTurn(), [entryFor(agentSessionFile)]);
+    const replaceBoth = vi.spyOn(PauseStore.prototype, "replaceBoth").mockImplementationOnce(() => {
+      throw new Error("manifest write failed");
+    });
+
+    const b = bootOnly();
+    heldRevive();
+    const cmdCtx = continueCtx(mainSessionFile);
+    await b.commands.get("continue").handler("", cmdCtx);
+    await flush();
+    replaceBoth.mockRestore();
+
+    expect(resumeCalls()).toBe(1);
+    const warnings = cmdCtx.ui.notify.mock.calls.filter((c: any[]) => c[1] === "warning").map((c: any[]) => String(c[0])).join(" ");
+    expect(warnings).not.toMatch(/Continuing the subagents only/);
   });
 
   it("replace([]) from the settle funnel preserves a landed mainTurn", async () => {

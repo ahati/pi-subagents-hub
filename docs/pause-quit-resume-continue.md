@@ -190,11 +190,14 @@ Cross-restart `/continue` also acquires a per-manifest
 is the atomic decision point, so this lock does not require hard-link support.
 The owner record includes a random token, preventing one activation from
 releasing another activation's lock even when they share a process ID. A
-contender with a live owner is reported as busy; a malformed or partially
-written lock fails closed and reports its path. A stale owner is reclaimed
-only after its PID is confirmed absent. The lock is held for the whole shadow
-continuation and released on success or failure. The manifest directory must
-support exclusive file creation and deletion.
+contender with a live owner is reported as busy. An owner record that is
+still being written is retried briefly; one that stays malformed fails closed
+and reports its path. A stale owner is reclaimed only after its PID is
+confirmed absent. The lock is held for the whole shadow continuation and
+released on success or failure; if the release fails after a completed
+continuation, the turn is not reported as failed and the path is surfaced for
+cleanup. The manifest directory must support exclusive file creation and
+deletion.
 
 The pending tool calls themselves are never duplicated into the manifest:
 the transcript already holds them, and the transcript is the source of
@@ -314,6 +317,9 @@ real sessions and the real resume flow.
   it, `/continue` fails closed and reports the marker path. After confirming the
   recorded PID is no longer running, remove that `.recovery` file and retry; the
   main-turn lock itself is reclaimed automatically when its owner PID is gone.
+  Retry `/continue` first: a read that lands in another writer's open-to-write
+  window is retried automatically, and only a record that stays malformed
+  reaches this manual path.
 - PID checks cannot distinguish the original owner from an unrelated process that
   later reuses the same PID. In that rare case the lock is reported as busy.
   Verify the process and session before manually removing the lock; there is

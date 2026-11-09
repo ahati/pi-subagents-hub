@@ -41,6 +41,13 @@ function resetManifestMainTurnClaim(store: PauseStore): void {
   });
 }
 
+interface ParkedMainTurnResult {
+  /** The parked turn was continued and the session switch was adopted. */
+  ok: boolean;
+  /** The live session was replaced, so the captured command context is stale. */
+  adopted: boolean;
+}
+
 function notifySafely(
   ctx: { ui: { notify(message: string, level: "info" | "warning"): void } },
   message: string,
@@ -399,13 +406,15 @@ export async function continuePausedCommand(
     }
 
     const lock = new MainTurnLock(resolvePauseManifestPath(ctx.cwd, sessionId));
+    let parkedTurn: ParkedMainTurnResult | undefined;
     try {
       const outcome = await withMainTurnLock(lock, async () => {
         store.setMainTurn({ ...mainTurn, claim: { pid: process.pid, at: new Date().toISOString() } });
         try {
-          const ok = await continueParkedMainTurn(ctx, store, revivable, deps);
-          if (!ok) resetManifestMainTurnClaim(store);
-          return ok;
+          const result = await continueParkedMainTurn(ctx, store, revivable, deps);
+          parkedTurn = result;
+          if (!result.ok) resetManifestMainTurnClaim(store);
+          return result;
         } catch (error) {
           try {
             resetManifestMainTurnClaim(store);
@@ -430,18 +439,31 @@ export async function continuePausedCommand(
       if (outcome.status === "unreadable") {
         notifySafely(
           ctx,
-          `Cannot safely read the parked main-turn lock at ${outcome.path}. Verify no pi process is continuing this session, remove that lock file, and retry /continue.`,
+          `The parked main-turn lock at ${outcome.path} is unreadable. Retry /continue; if it stays unreadable, confirm its recorded pid is gone, remove that file, and retry.`,
           "warning",
         );
         return;
       }
-      if (outcome.value) return;
+      if (outcome.releaseError !== undefined) {
+        // The continuation completed. A lock that could not be removed is
+        // recovery debt, not a failed turn; warn and keep the success result.
+        notifySafely(
+          ctx,
+          `The parked main-turn lock at ${lock.path} could not be removed: ${outcome.releaseError instanceof Error ? outcome.releaseError.message : String(outcome.releaseError)}. Remove that file after this command finishes.`,
+          "warning",
+        );
+      }
+      if (outcome.value.ok || outcome.value.adopted) return;
     } catch (error) {
       notifySafely(
         ctx,
         `Could not continue the parked main turn: ${error instanceof Error ? error.message : String(error)}`,
         "warning",
       );
+      // If the session was already replaced, `ctx` is stale and the rows were
+      // already handled in the new session. Falling through would revive them
+      // a second time through the dead context.
+      if (parkedTurn?.adopted) return;
     }
     continuedMain = false;
     notifySafely(ctx, "Continuing the subagents only — the main turn could not be continued.", "warning");
@@ -527,7 +549,7 @@ export async function continuePausedCommand(
   if (failedWorkflows > 0) parts.push(`${failedWorkflows} workflow run${failedWorkflows === 1 ? "" : "s"} could not be continued (kept in the manifest)`);
   if (undelivered.length > 0) parts.push(`${undelivered.length} result${undelivered.length === 1 ? "" : "s"} could not be delivered (kept in the manifest)`);
   if (parts.length === 0) parts.push("Nothing left to continue");
-  ctx.ui.notify(parts.join("; ") + ".", !continuedMain && resumed === 0 && resumedWorkflows === 0 && respawned === 0 && delivered === 0 && (failed.length > 0 || failedWorkflows > 0) ? "warning" : "info");
+  notifySafely(ctx, parts.join("; ") + ".", !continuedMain && resumed === 0 && resumedWorkflows === 0 && respawned === 0 && delivered === 0 && (failed.length > 0 || failedWorkflows > 0) ? "warning" : "info");
 }
 
 export async function continueParkedMainTurn(
@@ -535,12 +557,13 @@ export async function continueParkedMainTurn(
   store: PauseStore,
   entries: PausedAgentEntry[],
   deps: PauseContinueDeps,
-): Promise<boolean> {
+): Promise<ParkedMainTurnResult> {
   const { park } = deps;
+  let adopted = false;
   const sessionFile = ctx.sessionManager?.getSessionFile?.();
   if (!sessionFile) {
     ctx.ui.notify("Could not continue the parked main turn — the session file is unknown.", "warning");
-    return false;
+    return { ok: false, adopted };
   }
   try {
     const current = ctx.sessionManager;
@@ -579,7 +602,6 @@ export async function continueParkedMainTurn(
       ctx.ui.notify("Continuing the parked main turn — pi reloads the session when it finishes.", "info");
     }
     const failed: PausedAgentEntry[] = [];
-    let adopted = false;
     park.mainTurnSwitchInProgress = true;
     try {
       await ctx.switchSession(sessionFile, {
@@ -639,16 +661,16 @@ export async function continueParkedMainTurn(
     if (!adopted) {
       resetManifestMainTurnClaim(store);
       notifySafely(ctx, "The parked main turn could not be adopted in this host — continuing the subagents only.", "warning");
-      return false;
+      return { ok: false, adopted };
     }
-    return true;
+    return { ok: true, adopted };
   } catch (err) {
     notifySafely(
       ctx,
       `Could not continue the parked main turn: ${err instanceof Error ? err.message : String(err)}`,
       "warning",
     );
-    return false;
+    return { ok: false, adopted };
   }
 }
 
