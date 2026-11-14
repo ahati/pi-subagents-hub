@@ -41,11 +41,18 @@ export function setRememberAgents(b: boolean): void { rememberAgents = b; }
 
 /** Additional turns allowed after the soft limit steer message. */
 let graceTurns = 5;
+/** Headless parent wait in minutes; 0 = no limit. */
+let headlessWaitMinutes = 0;
 
 /** Get the grace turns value. */
 export function getGraceTurns(): number { return graceTurns; }
 /** Set the grace turns value (minimum 1). */
 export function setGraceTurns(n: number): void { graceTurns = Math.max(1, n); }
+
+/** Get the headless wait in minutes (0 = no limit). */
+export function getHeadlessWaitMinutes(): number { return headlessWaitMinutes; }
+/** Set the headless wait in minutes (0 = no limit). */
+export function setHeadlessWaitMinutes(n: number): void { headlessWaitMinutes = Math.max(0, n); }
 
 /**
  * Default providers whose subagents inherit the uncut parent system prompt.

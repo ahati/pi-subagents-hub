@@ -53,6 +53,12 @@ export interface SubagentsSettings {
    */
   defaultMaxTurns?: number;
   graceTurns?: number;
+  /**
+   * How long a headless parent (`pi -p`, JSON mode) waits, in minutes, for
+   * background agents and workflows after its turn ends before stopping them —
+   * `0` = no limit, the default. `10` matches Claude Code's ceiling.
+   */
+  headlessWaitMinutes?: number;
   defaultJoinMode?: JoinMode;
   /**
    * Whether a top-level `Agent` spawn that doesn't say runs detached.
@@ -382,6 +388,7 @@ export interface SettingsAppliers {
   setMaxConcurrentNested: (n: number) => void;
   setDefaultMaxTurns: (n: number) => void;
   setGraceTurns: (n: number) => void;
+  setHeadlessWaitMinutes: (n: number) => void;
   setDefaultJoinMode: (mode: JoinMode) => void;
   setBackgroundByDefault: (b: boolean) => void;
   setSchedulingEnabled: (b: boolean) => void;
@@ -493,6 +500,13 @@ function sanitize(raw: unknown): SubagentsFileSettings {
     (r.graceTurns as number) <= GRACE_TURNS_CEILING
   ) {
     out.graceTurns = r.graceTurns as number;
+  }
+  if (
+    Number.isInteger(r.headlessWaitMinutes) &&
+    (r.headlessWaitMinutes as number) >= 0 &&
+    (r.headlessWaitMinutes as number) <= 24 * 60
+  ) {
+    out.headlessWaitMinutes = r.headlessWaitMinutes as number;
   }
   if (
     Number.isInteger(r.maxSubagentDepth) &&
@@ -696,6 +710,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.maxConcurrentNested === "number") appliers.setMaxConcurrentNested(s.maxConcurrentNested);
   if (typeof s.defaultMaxTurns === "number") appliers.setDefaultMaxTurns(s.defaultMaxTurns);
   if (typeof s.graceTurns === "number") appliers.setGraceTurns(s.graceTurns);
+  if (typeof s.headlessWaitMinutes === "number") appliers.setHeadlessWaitMinutes(s.headlessWaitMinutes);
   if (typeof s.maxSubagentDepth === "number") appliers.setMaxSubagentDepth(s.maxSubagentDepth);
   if (typeof s.fallbackSubagent === "string") appliers.setFallbackSubagent(s.fallbackSubagent);
   if (s.defaultJoinMode) appliers.setDefaultJoinMode(s.defaultJoinMode);

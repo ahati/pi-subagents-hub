@@ -12,6 +12,8 @@
  * Extracted from codesoda/pi-subagents#2 (test-only follow-up to #164) and
  * reconciled with the merged #164 frontmatter contract (`allowed_subagents`
  * opt-in; no nested tools injected at the depth cap).
+ * NOTE: the extension is bound in `tui` mode here; the headless drain would hold
+ * these ownership scenarios open until their held children settle.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -133,6 +135,7 @@ async function runWithAgents(
   const cwd = mkdtempSync(join(tmpdir(), "subagents-nested-e2e-"));
   writeAgents(cwd, agents);
   const run = await runPrintMode({
+    mode: "tui",
     ...options,
     cwd,
     respond,

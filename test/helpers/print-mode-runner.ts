@@ -99,6 +99,8 @@ export type FauxResponder = (
 export interface RunPrintModeOptions {
   /** The user prompt that kicks off the parent turn. */
   prompt: string;
+  /** Extension mode bound to the parent session. Default "print" (a headless host). */
+  mode?: "tui" | "rpc" | "json" | "print";
   /**
    * Working directory for the run. Defaults to a fresh temp dir that `dispose()`
    * removes. Pass a fixtures dir to make project custom agents discoverable.
@@ -408,7 +410,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
 
   // Binding fires session_start so the extension initializes and publishes its
   // manager on the global Symbol.
-  await session.bindExtensions({});
+  await session.bindExtensions({ mode: options.mode ?? "print" });
 
   const manager = (globalThis as Record<symbol, unknown>)[MANAGER_KEY] as
     | ManagerHandle

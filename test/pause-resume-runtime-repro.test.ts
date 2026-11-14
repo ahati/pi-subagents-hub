@@ -23,6 +23,7 @@
  *
  * Outcome: the full sequence WORKS through the real runtime machinery —
  * kept as an end-to-end regression test for the resume flow.
+ * NOTE: the extension is bound in `tui` mode here — see pause-continue-print-mode.e2e.test.ts.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -118,6 +119,7 @@ describe("REPRO (runtime): /pause → quit → /resume → /continue", () => {
 
     const parentSm = SessionManager.create(cwd, sessionDir);
     const run1 = await runPrintMode({
+      mode: "tui",
       live: false,
       cwd,
       prompt: "delegate work",
@@ -209,7 +211,7 @@ describe("REPRO (runtime): /pause → quit → /resume → /continue", () => {
           model,
         });
         // Binding fires session_start so the extension publishes its manager.
-        await created.session.bindExtensions({});
+        await created.session.bindExtensions({ mode: "tui" });
         return { ...created, services, diagnostics: [] };
       };
       const runtime2 = await createAgentSessionRuntime(createRuntime, {

@@ -120,46 +120,34 @@ describe.skipIf(LIVE)("subagents print-mode e2e (scripted faux, real pi-mono)", 
     expect(run.modelCalls).toBeGreaterThanOrEqual(3);
   });
 
-  it("the hold condition is load-bearing: it keeps a BACKGROUND child alive (vs abandoned without it)", async () => {
-    // The child takes a beat to "think" (a real delay in its faux turn). That
-    // delay is what makes the contrast causal and deterministic:
-    //   - WITHOUT the hold, the parent's turn ends and the runner tears down
-    //     before the child ever streams → the child is abandoned (2 model calls:
-    //     parent's tool-call turn + its summary turn; the child never runs).
-    //   - WITH the hold, the parent loop blocks in waitForAll() until the child
-    //     finishes → the child's own model turn actually runs (≥3 calls).
+  // The parent ends its turn while a BACKGROUND child is still thinking (a real
+  // delay in the child's faux turn). Headless, nothing would ever come back for
+  // it: the extension itself must keep the run open until the child reports,
+  // then hand the completion to the parent for a turn of its own — no host-side
+  // hold patch involved. `hold: true` must keep working for hosts that still
+  // apply the pi-chonky-step patch; with it the drain finds nothing to wait for.
+  it.each([false, true])("keeps the run open until a BACKGROUND child reports back (host hold: %s)", async (hold) => {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const sawCompletion = (ctx: Context) => JSON.stringify(ctx.messages).includes("CHILD_BG_RAN");
     const respond = async (ctx: Context) => {
-      const isParent = !isSubagentContext(ctx);
-      if (!isParent) {
-        await sleep(80); // child takes long enough that a non-held parent exits first
+      if (isSubagentContext(ctx)) {
+        await sleep(80); // long enough that the parent's turn ends first
         return "CHILD_BG_RAN";
       }
+      if (sawCompletion(ctx)) return "Parent relays: CHILD_BG_RAN";
       const spawned = ctx.messages.some(
         (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
       );
       return spawned
-        ? "summarized"
+        ? "Started; waiting for it."
         : agentCall({ description: "bg work", prompt: "Do background work.", run_in_background: true });
     };
 
-    // Control: no hold → the child hasn't run by the time the parent turn ends.
-    // `modelCalls` is snapshotted at that moment (it's a plain number on the
-    // result), so draining afterwards to tear down cleanly doesn't change it.
-    const noHold = await runPrintMode({ prompt: "go", hold: false, respond });
-    const abandonedCalls = noHold.modelCalls;
-    await noHold.manager?.waitForAll(); // let the orphan finish before dispose (avoids stale-ctx)
-    await noHold.dispose();
+    run = await runPrintMode({ prompt: "go", hold, respond });
 
-    // Subject: hold on → child runs to completion before the parent finishes.
-    run = await runPrintMode({ prompt: "go", hold: true, respond });
-
-    // Background spawn returns its envelope synchronously either way.
     expect(agentToolResults(run.parentSession)[0]).toMatch(/background/i);
-    // The hold is load-bearing: only with it does the child's turn actually run.
-    expect(abandonedCalls).toBe(2); // parent tool-call + summary; child never streamed
-    expect(run.modelCalls).toBeGreaterThan(abandonedCalls);
-    expect(run.modelCalls).toBeGreaterThanOrEqual(3);
+    // The printed answer is the parent's reaction to the completion.
+    expect(run.responseText).toContain("Parent relays: CHILD_BG_RAN");
   });
 
   it("spawns a FRONTMATTER-defined (.pi/agents/*.md) agent and its prompt reaches the child", async () => {

@@ -173,7 +173,11 @@ Restrictions:
 - `schedule` cannot be combined with `inherit_context` (no parent conversation exists at fire time) or `resume` (schedules create fresh agents).
 - `run_in_background: false` is refused — scheduled jobs always run in the background. Omitting it, or passing `true`, is fine.
 - Scheduled fires bypass the `maxConcurrent` queue so a 5-minute interval cannot be deferred behind long-running manual agents.
-- **Headless `pi -p` doesn't wait for scheduled subagents.**
+- **Headless `pi -p` doesn't wait for scheduled fires that haven't happened yet.** A scheduled agent already running when the turn ends is waited for like any other background work — see [Headless mode](#headless-mode-pi--p).
+
+### Headless mode (`pi -p`)
+
+In print and JSON mode, a turn that ends while background agents or workflows are still running does not end the run. pi-subagents waits for that work at pi's `agent_before_settle` boundary, writes `[pi-subagents] Waiting for background work to finish (…). Press Ctrl+C to exit now.` to stderr, and hands the completions to the model, which reacts in a further turn. The printed answer is that reaction, as with Claude Code's `-p`. The wait has no limit by default; [`headlessWaitMinutes`](#persistent-settings) stops the work after that many minutes instead, and lets pi exit without another turn. Interactive (TUI) and RPC sessions never wait — their completions start a turn through the outbox as usual. Nested background children follow their own rule: they are stopped when the agent that started them ends its run, unless it collected them first ([Nested subagents](#nested-subagents)).
 
 ## UI
 
@@ -645,7 +649,7 @@ Skipping is immediate for a running agent and for one held at a pause; an agent 
 |------|-------------|
 | `--subagents-workflow-file=<path>` | Run a workflow script at session start |
 
-Use the `=` form. The bare `--flag value` spelling consumes the next argument, so `pi --subagents-workflow-file review.js "do the thing"` would take the prompt as the flag's value. Composes with headless mode: `pi -p --subagents-workflow-file=review.js`. With no tool call to attach to, the run renders as a session entry and its result is handed to the model as context for its next turn.
+Use the `=` form. The bare `--flag value` spelling consumes the next argument, so `pi --subagents-workflow-file review.js "do the thing"` would take the prompt as the flag's value. Composes with headless mode: `pi -p --subagents-workflow-file=review.js "Report the result."` runs the workflow and the turn together, and the model answers with the result. With no prompt, a headless `-p` starts no turn to report into, so the run is stopped at exit with a warning; interactive sessions keep the detached run and its session entry.
 
 The `/agents` command opens an interactive menu:
 
@@ -751,11 +755,13 @@ When on, each subagent spawn's effective model is validated against pi's own `en
 
 ## Persistent Settings
 
-Runtime tuning values set via `/agents` → Settings (max background concurrency, max foreground concurrency, max nested concurrency, nested depth, default max turns, grace turns, fallback agent, default join mode, scheduling on/off, workflows on/off, scope models on/off, disable defaults on/off, strict agent files on/off, package agents on/off, package workflows on/off, background spawns on/off, remember agents on/off, worktree isolation on/off, agent mentions model/direct/off, output transcript on/off, tool description full/compact/custom, widget all/background/off, fleet view on/off, usage reporting on/off, cost display on/off, model display on/off, UI style pi/claude, viewer style chat/compact, uncut prompt providers) persist across pi restarts. Two files, merged on load:
+Runtime tuning values set via `/agents` → Settings (max background concurrency, max foreground concurrency, max nested concurrency, nested depth, default max turns, grace turns, headless wait, fallback agent, default join mode, scheduling on/off, workflows on/off, scope models on/off, disable defaults on/off, strict agent files on/off, package agents on/off, package workflows on/off, background spawns on/off, remember agents on/off, worktree isolation on/off, agent mentions model/direct/off, output transcript on/off, tool description full/compact/custom, widget all/background/off, fleet view on/off, usage reporting on/off, cost display on/off, model display on/off, UI style pi/claude, viewer style chat/compact, uncut prompt providers) persist across pi restarts. Two files, merged on load:
 - **Global:** `~/.pi/agent/subagents.json` — your machine-wide defaults. Written by `/agents` → Settings when the project has no `subagents.json` of its own.
 - **Project:** `<cwd>/.pi/subagents.json` — per-project overrides. Written by `/agents` → Settings when the file already exists; a settings change never creates one.
 
-**Precedence:** project overrides global on any field present in both. Missing fields fall back to the hardcoded defaults (max background concurrency `10`, max foreground concurrency `0` = unlimited, max nested concurrency `10`, default max turns unlimited, grace turns `5`, nested depth `2`, join mode `smart`, defaults enabled).
+**Precedence:** project overrides global on any field present in both. Missing fields fall back to the hardcoded defaults (max background concurrency `10`, max foreground concurrency `0` = unlimited, max nested concurrency `10`, default max turns unlimited, grace turns `5`, headless wait `0` = no limit, nested depth `2`, join mode `smart`, defaults enabled).
+
+**Headless wait** (`headlessWaitMinutes`, default `0` = no limit): how long a [headless](#headless-mode-pi--p) parent waits for background work after its turn ends. When the limit passes, pi-subagents writes `[pi-subagents] Background work still running after <n> min (…); stopping it.` to stderr, stops the agents and workflows, and lets pi exit without another turn. `10` matches Claude Code's default ceiling; each wait gets the full limit, and a turn in between restarts it. Interactive and RPC sessions never wait, so the setting does nothing there.
 
 **Prompt cache retention** (`cacheRetention`, default `inherit`): a file-only setting in `subagents.json`; accepted values are `inherit`, `none`, `short`, and `long`, with project overriding global. `inherit` or an omitted key leaves Pi's request options unchanged, including its `PI_CACHE_RETENTION` environment default; the other values supply `cacheRetention` on each child session's model calls when the request does not already specify one, without changing the parent session or process environment. The setting is read when each child session is created, so nested, workflow, scheduled, reopened, and mention-clone sessions all use it. There is no `/agents → Settings` row and no per-agent frontmatter override.
 

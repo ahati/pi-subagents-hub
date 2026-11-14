@@ -19,10 +19,12 @@ import type { ScrollViewScrollbar } from "@earendil-works/pi-tui";
 import { isTopLevelAgent } from "./agent-manager.js";
 import {
   getDefaultMaxTurns,
+  getHeadlessWaitMinutes,
   normalizeMaxTurns,
   resolveEffectiveMaxTurns,
   setDefaultMaxTurns,
   setGraceTurns,
+  setHeadlessWaitMinutes,
   setRememberAgents,
   setUncutPromptProviders,
 } from "./agent-runner.js";
@@ -418,6 +420,7 @@ export default function (pi: ExtensionAPI) {
       setMaxConcurrentNested: (n) => manager.setMaxConcurrentNested(n),
       setDefaultMaxTurns,
       setGraceTurns,
+      setHeadlessWaitMinutes,
       setDefaultJoinMode,
       setBackgroundByDefault,
       setSchedulingEnabled,
@@ -446,6 +449,17 @@ export default function (pi: ExtensionAPI) {
   );
 
   const workflowTasks = new Map<string, WorkflowTask>();
+  /**
+   * Detached runs until each has settled AND handed its result to the outbox —
+   * what a headless parent's drain waits on. `workflowTasks` keeps finished
+   * runs for their cards, and between stages a run has no agent in the manager,
+   * so neither can say whether a run is still going.
+   */
+  const workflowRuns = new Set<Promise<void>>();
+  function trackWorkflowRun(run: Promise<void>): void {
+    workflowRuns.add(run);
+    void run.finally(() => workflowRuns.delete(run));
+  }
 
   const pauseDeps: PauseContinueDeps = {
     pi,
@@ -518,9 +532,73 @@ export default function (pi: ExtensionAPI) {
     },
     isWorktreeIsolationEnabled,
     isSchedulingEnabled,
+    trackRun: trackWorkflowRun,
   });
 
   if (isWorkflowsEnabled()) pi.registerTool(workflowTool);
+
+  // ---- Headless drain (print / JSON mode) ----
+  // Nothing follows a headless parent's run: pi prints its last message and
+  // disposes the session, and `session_shutdown` stops whatever is still
+  // running. So the run's last boundary waits for background work and returns
+  // the completions as an entry that continues the run — the model reacts in a
+  // turn of its own, as with Claude Code's `-p`. TUI and RPC keep the session
+  // open, so their completions start a turn through the outbox as usual.
+  const isHeadless = (ctx: ExtensionContext) => ctx.mode === "print" || ctx.mode === "json";
+  const hasBackgroundWork = () => manager.hasRunning() || workflowRuns.size > 0;
+  const allBackgroundWorkSettled = () => Promise.allSettled([manager.waitForAll(), ...workflowRuns]);
+  function describeBackgroundWork(): string {
+    const agents = manager.listAgents()
+      .filter(r => isTopLevelAgent(r) && (r.status === "running" || r.status === "queued")).length;
+    return [
+      agents > 0 ? `${agents} agent${agents === 1 ? "" : "s"}` : "",
+      workflowRuns.size > 0 ? `${workflowRuns.size} workflow${workflowRuns.size === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(", ");
+  }
+
+  pi.on("agent_before_settle", async (event, ctx) => {
+    if (!isHeadless(ctx) || !hasBackgroundWork()) return;
+    process.stderr.write(
+      `[pi-subagents] Waiting for background work to finish (${describeBackgroundWork()}). Press Ctrl+C to exit now.\n`,
+    );
+    const headlessWaitMinutes = getHeadlessWaitMinutes();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ceiling = headlessWaitMinutes > 0
+      ? new Promise<"ceiling">(resolve => { timer = setTimeout(() => resolve("ceiling"), headlessWaitMinutes * 60_000); })
+      : undefined;
+    try {
+      // Loops: a workflow starts agents, and a finished agent starts a queued one.
+      while (hasBackgroundWork()) {
+        const settled = allBackgroundWorkSettled();
+        if ((await (ceiling ? Promise.race([settled, ceiling]) : settled)) !== "ceiling") continue;
+        process.stderr.write(
+          `[pi-subagents] Background work still running after ${headlessWaitMinutes} min (${describeBackgroundWork()}); ` +
+            "stopping it. Set headlessWaitMinutes to 0 to wait indefinitely.\n",
+        );
+        for (const task of workflowTasks.values()) task.abortController.abort();
+        manager.abortAll();
+        // The stderr line is the report: drop the "stopped" notifications rather
+        // than spend a turn on them, or leave them for the outbox's idle timer.
+        await allBackgroundWorkSettled();
+        outbox.take();
+        return;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+    const message = outbox.take();
+    if (!message) return;
+    return {
+      entries: [...event.entries, {
+        type: "custom_message" as const,
+        customType: "subagent-notification",
+        content: message.content,
+        display: true,
+        details: message.details,
+      }],
+      continue: true,
+    };
+  });
 
   const resolveMention = (name: string) => manager.resolveMention(name);
 

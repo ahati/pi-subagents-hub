@@ -130,7 +130,7 @@ describe("result reads during worktree cleanup", () => {
       const text = result.content[0].type === "text" ? result.content[0].text : "";
 
       expect(early).toEqual({ returned: false, consumed: false, cancelled: 0 });
-      expect(text).toContain(options.preservationFails ? "Automatic preservation failed" : "Changes saved to branch");
+      expect(text).toContain(options.preservationFails ? "Worktree cleanup failed" : "Changes saved to branch");
       expect(f.record.promise).toBe(f.promise);
       expect(f.record.resultConsumed).toBe(true);
       expect(f.cancel).toHaveBeenCalledExactlyOnceWith(f.id);
@@ -180,7 +180,8 @@ describe("result reads during worktree cleanup", () => {
       f.release.resolve();
       await f.promise;
       expect(f.consumedAtCompletion).toEqual([false]);
-      expect(f.record.result).toContain("Automatic preservation failed");
+      expect(f.record.status).toBe("error");
+      expect(f.record.error).toContain("Worktree cleanup failed");
     } finally {
       await f.dispose();
     }

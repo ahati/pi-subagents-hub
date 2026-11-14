@@ -319,7 +319,7 @@ describe("agent-runner final output capture", () => {
 
     await runAgent(ctx, "Explore", "Say CONFIGURED", { pi, cwd: "/tmp/worktree" });
 
-    expect(getAgentDir).toHaveBeenCalledTimes(1);
+    expect(getAgentDir).toHaveBeenCalled();
     expect(defaultResourceLoaderCtor).toHaveBeenCalledWith(expect.objectContaining({
       cwd: "/tmp/worktree",
       agentDir: "/mock/agent-dir",

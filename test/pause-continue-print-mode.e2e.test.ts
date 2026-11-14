@@ -17,6 +17,10 @@
  *
  * The disk is the assertion surface: the manifest, the child session file's
  * content before and after the continuation, and the parent's follow-up turn.
+ * NOTE: the extension is bound in `tui` mode here. These tests drive pause/quit/
+ * continue; a real `print` binding would engage the headless drain and keep the
+ * parent turn open until the paused work settles, which is not the surface under
+ * test. Headless drain itself is covered in headless-drain.test.ts.
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -76,6 +80,7 @@ describe("/pause → quit → reload → /continue (real pi sessions, faux model
     });
 
     const run1 = await runPrintMode({
+      mode: "tui",
       live: false,
       cwd,
       prompt: "delegate work",
@@ -184,6 +189,7 @@ describe("/pause → quit → reload → /continue (real pi sessions, faux model
     const child2Seen: string[] = [];
 
     const run1 = await runPrintMode({
+      mode: "tui",
       live: false,
       cwd,
       prompt: "start workflow",
@@ -316,6 +322,7 @@ describe("/pause → quit → reload → /continue (real pi sessions, faux model
     let wfSeen = false;
 
     const run1 = await runPrintMode({
+      mode: "tui",
       live: false,
       cwd,
       prompt: "orchestrator start",
@@ -498,6 +505,7 @@ describe("/pause → quit → reload → /continue (real pi sessions, faux model
     }
 
     const run1 = await runPrintMode({
+      mode: "tui",
       live: false,
       cwd,
       prompt: "orchestrator start",

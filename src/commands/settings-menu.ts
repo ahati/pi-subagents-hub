@@ -14,10 +14,12 @@ import {
   DEFAULT_UNCUT_PROMPT_PROVIDERS,
   getDefaultMaxTurns,
   getGraceTurns,
+  getHeadlessWaitMinutes,
   getRememberAgents,
   getUncutPromptProviders,
   setDefaultMaxTurns,
   setGraceTurns,
+  setHeadlessWaitMinutes,
   setRememberAgents,
 } from "../agent-runner.js";
 import {
@@ -113,6 +115,7 @@ function snapshotSettings(deps: SettingsMenuDeps) {
     maxConcurrentNested: deps.manager.getMaxConcurrentNested(),
     defaultMaxTurns: getDefaultMaxTurns() ?? 0,
     graceTurns: getGraceTurns(),
+    headlessWaitMinutes: getHeadlessWaitMinutes(),
     defaultJoinMode: deps.getDefaultJoinMode(),
     backgroundByDefault: deps.getBackgroundByDefault(),
     schedulingEnabled: deps.isSchedulingEnabled(),
@@ -276,6 +279,13 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
         description: "Grace turns after wrap-up steer (Enter to type)",
         currentValue: String(gt),
         values: [String(gt)],
+      },
+      {
+        id: "headlessWaitMinutes",
+        label: "Headless wait (min)",
+        description: "pi -p: minutes to wait for background work before stopping it (0 = no limit, Enter to type)",
+        currentValue: String(getHeadlessWaitMinutes()),
+        values: [String(getHeadlessWaitMinutes())],
       },
       {
         id: "joinMode",
@@ -479,6 +489,16 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
       if (n >= 1) {
         setGraceTurns(n);
         notifyApplied(ctx, `Grace turns set to ${n}`, deps);
+      }
+    } else if (id === "headlessWaitMinutes") {
+      const n = parseInt(value, 10);
+      if (n >= 0) {
+        setHeadlessWaitMinutes(n);
+        notifyApplied(
+          ctx,
+          n === 0 ? "Headless wait set to no limit" : `Headless wait set to ${n} min`,
+          deps,
+        );
       }
     } else if (id === "maxSubagentDepth") {
       const n = parseInt(value, 10);
