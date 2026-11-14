@@ -757,6 +757,8 @@ Runtime tuning values set via `/agents` → Settings (max background concurrency
 
 **Precedence:** project overrides global on any field present in both. Missing fields fall back to the hardcoded defaults (max background concurrency `10`, max foreground concurrency `0` = unlimited, max nested concurrency `10`, default max turns unlimited, grace turns `5`, nested depth `2`, join mode `smart`, defaults enabled).
 
+**Prompt cache retention** (`cacheRetention`, default `inherit`): a file-only setting in `subagents.json`; accepted values are `inherit`, `none`, `short`, and `long`, with project overriding global. `inherit` or an omitted key leaves Pi's request options unchanged, including its `PI_CACHE_RETENTION` environment default; the other values supply `cacheRetention` on each child session's model calls when the request does not already specify one, without changing the parent session or process environment. The setting is read when each child session is created, so nested, workflow, scheduled, reopened, and mention-clone sessions all use it. There is no `/agents → Settings` row and no per-agent frontmatter override.
+
 **Filter:** the Settings page has a filter line above the rows. Type to narrow the list by label, `↑`/`↓` move within the matches, and Enter on a numeric row opens that row's editor. Esc closes the page; Backspace edits the filter.
 
 **Nested depth** (`maxSubagentDepth`, default `2`): the hard ceiling on [nested delegation](#nested-subagents), counted from the main session (main = 0, its subagents = 1). `0` or `1` disables nested subagents entirely, even for agents that set `allowed_subagents` — see the [depth table](#nested-subagents). Read when a subagent session is built, so a change applies to agents started after it.
@@ -1138,6 +1140,7 @@ src/
 
   # Execution
   agent-runner.ts     # Re-exports runAgent/runDurableAgent from runner/
+  cache-retention.ts  # Per-child model-call prompt cache retention
   runner/
     runner-session.ts # Universal durable execution pipeline with @earendil-works/pi-durable Harness
     durable-tool-bridge.ts # Adapts Pi extension tools, MCP servers, and nested tools to durable ToolRegistration

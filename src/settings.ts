@@ -7,6 +7,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { CacheRetention } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
 import type { AgentMentionMode, JoinMode, UIStyle, ViewerStyle } from "./types.js";
@@ -358,6 +359,12 @@ export interface SubagentsSettings {
   uncutPromptProviders?: string[];
 }
 
+/** Settings that exist only in subagents.json, not in the /agents menu snapshot. */
+export interface SubagentsFileSettings extends SubagentsSettings {
+  /** Per-child model-call prompt cache retention. `inherit` (or absent) leaves Pi's request options untouched, including `PI_CACHE_RETENTION`. */
+  cacheRetention?: CacheRetention | "inherit";
+}
+
 export type ToolDescriptionMode = "full" | "compact" | "custom";
 
 /** Setter hooks used by applySettings to wire persisted values into in-memory state. */
@@ -429,10 +436,13 @@ function sanitizePackageGate(val: unknown): boolean | string[] | undefined {
 }
 
 /** Drop fields that don't match the expected shape. Silent — garbage becomes absent. */
-function sanitize(raw: unknown): SubagentsSettings {
+function sanitize(raw: unknown): SubagentsFileSettings {
   if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
-  const out: SubagentsSettings = {};
+  const out: SubagentsFileSettings = {};
+  if (r.cacheRetention === "inherit" || r.cacheRetention === "none" || r.cacheRetention === "short" || r.cacheRetention === "long") {
+    out.cacheRetention = r.cacheRetention;
+  }
   if (
     Number.isInteger(r.maxConcurrent) &&
     (r.maxConcurrent as number) >= 1 &&
@@ -574,7 +584,7 @@ function projectPath(cwd: string): string {
  * exists but can't be parsed emits a warning to stderr so users aren't
  * silently reverted to defaults — and still returns `{}` so startup proceeds.
  */
-function readSettingsFile(path: string): SubagentsSettings {
+function readSettingsFile(path: string): SubagentsFileSettings {
   if (!existsSync(path)) return {};
   try {
     return sanitize(JSON.parse(readFileSync(path, "utf-8")));
@@ -586,7 +596,7 @@ function readSettingsFile(path: string): SubagentsSettings {
 }
 
 /** Load merged settings: global provides defaults, project overrides. */
-export function loadSettings(cwd: string = process.cwd()): SubagentsSettings {
+export function loadSettings(cwd: string = process.cwd()): SubagentsFileSettings {
   return { ...readSettingsFile(globalPath()), ...readSettingsFile(projectPath(cwd)) };
 }
 
@@ -603,8 +613,18 @@ export function saveSettings(s: SubagentsSettings, cwd: string = process.cwd()):
   const project = projectPath(cwd);
   const path = existsSync(project) ? project : globalPath();
   try {
+    // The menu snapshot has no row for file-only settings; carry them over so
+    // changing an ordinary setting cannot silently drop them. A malformed file
+    // has nothing to carry (and must not turn the write into a failure).
+    let cacheRetention: SubagentsFileSettings["cacheRetention"];
+    try {
+      cacheRetention = existsSync(path)
+        ? sanitize(JSON.parse(readFileSync(path, "utf-8"))).cacheRetention
+        : undefined;
+    } catch { /* malformed file: write the snapshot as-is */ }
+    const payload = cacheRetention === undefined ? s : { ...s, cacheRetention };
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(s, null, 2), "utf-8");
+    writeFileSync(path, JSON.stringify(payload, null, 2), "utf-8");
     return true;
   } catch {
     return false;

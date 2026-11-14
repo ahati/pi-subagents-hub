@@ -91,6 +91,22 @@ describe("settings persistence", () => {
     });
   });
 
+  it("accepts cacheRetention values and drops unknown ones", () => {
+    writeProject({ cacheRetention: "short" });
+    expect(loadSettings(projectDir)).toEqual({ cacheRetention: "short" });
+
+    writeProject({ cacheRetention: "forever" });
+    expect(loadSettings(projectDir)).toEqual({});
+  });
+
+  it("keeps file-only cacheRetention when saving menu settings", () => {
+    writeProject({ cacheRetention: "long", maxConcurrent: 8 });
+
+    saveSettings({ maxConcurrent: 4 }, projectDir);
+
+    expect(loadSettings(projectDir)).toEqual({ cacheRetention: "long", maxConcurrent: 4 });
+  });
+
   it("round-trips values: saveSettings then loadSettings", () => {
     const settings = {
       maxConcurrent: 7,
