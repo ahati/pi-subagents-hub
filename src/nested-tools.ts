@@ -90,6 +90,7 @@ export interface NestedAgentManager {
     onSpawned?: (id: string) => void,
   ): Promise<{ id: string; record: AgentRecord }>;
   getRecord(id: string): AgentRecord | undefined;
+  waitForBackgroundChild?(parentAgentId: string, signal?: AbortSignal): Promise<boolean>;
   resume(id: string, prompt: string, signal?: AbortSignal, options?: {
     maxTurns?: number;
     onAssistantUsage?: (usage: LifetimeUsage) => void;
@@ -210,9 +211,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
     description:
       "Launch a child-safe nested subagent for bounded delegated work. " +
       "Only use agent types allowed by this parent agent; nesting is depth-limited. " +
-      // Overrides the main session's inherited Agent guideline ("you will be
-      // notified on completion"), which does not hold for nested children.
-      "A background nested agent does NOT notify you when it finishes: collect each one with get_subagent_result (wait: true) before you end your turn, or it is stopped and its work is lost.",
+      "When run_in_background is true, you will receive a completion notification when it finishes; use get_subagent_result (wait: true) only if you need its output before continuing.",
     parameters: Type.Object({
       prompt: Type.String({ description: "Self-contained task for the nested agent." }),
       description: Type.String({ description: "Short 3-5 word task description." }),
@@ -222,7 +221,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       max_turns: Type.Optional(Type.Number({ minimum: 1 })),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Defaults to false for nested spawns — the call blocks and returns the child's result inline. Set true only for work you will collect later with get_subagent_result; a detached child is stopped when you finish.",
+          description: "Defaults to false for nested spawns — the call blocks and returns the child's result inline. Set true to run in the background; you will receive a completion notification when it finishes (or can check with get_subagent_result).",
         }),
       ),
       resume: Type.Optional(Type.String({ description: "Resume a nested agent owned by this parent." })),
@@ -407,7 +406,11 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
           // Worktree isolation starts the agent asynchronously; surface its
           // failure as a tool error, like the synchronous throw used to.
           await context.manager.awaitStartup(id);
-          return textResult(`Nested agent started in background. Agent ID: ${id}`);
+          return textResult(
+            `Nested agent started in background. Agent ID: ${id}\n` +
+            "You will be notified when this agent completes.\n" +
+            "Continue with other work (do not poll), or call get_subagent_result with wait: true if you need its report before continuing. Use steer_subagent to send it messages.",
+          );
         }
 
         const { record } = await whileWaiting(context, () => context.manager.spawnAndWait(
@@ -445,9 +448,20 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       // them, so poll — abortably — until they leave the queue, then await.
       if ((params.wait && (record.status === "running" || record.status === "queued")) ||
         (record.worktree && record.status !== "running" && record.status !== "queued" && record.status !== "paused")) {
-        await whileWaiting(context, () => waitForRecord(record, signal));
+        const owner = context.manager.getRecord(context.parentAgentId);
+        if (owner) {
+          owner.waitingChildIds ??= new Set();
+          owner.waitingChildIds.add(record.id);
+        }
+        try {
+          await whileWaiting(context, () => waitForRecord(record, signal));
+          consumeTerminalResult(record);
+        } finally {
+          owner?.waitingChildIds?.delete(record.id);
+        }
+      } else {
+        consumeTerminalResult(record);
       }
-      consumeTerminalResult(record);
       return textResult(formatRecord(record, "fetched"), record.status === "error");
     },
   });

@@ -55,6 +55,30 @@ export async function resumeAgent(
         failure = err instanceof Error ? err.message : String(err);
       }
     }
+
+    const stopped = () =>
+      options.signal?.aborted === true ||
+      run.aborted ||
+      run.steered ||
+      finalTurnError(session, startLen) !== undefined;
+
+    if (!failure && !stopped()) {
+      for (;;) {
+        if (
+          session.agent?.hasQueuedMessages?.() &&
+          typeof session.agent?.continue === "function"
+        ) {
+          await session.agent.continue();
+          if (stopped()) break;
+        }
+        const waited = await options.waitForBackgroundChild?.();
+        if (
+          !waited &&
+          !(session.agent?.hasQueuedMessages?.() && typeof session.agent?.continue === "function")
+        ) break;
+        if (stopped()) break;
+      }
+    }
   } finally {
     collector.unsubscribe();
     run.unsubscribe();

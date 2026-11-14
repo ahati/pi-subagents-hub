@@ -261,4 +261,75 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       rmSync(transcriptRoot, { recursive: true, force: true });
     }
   });
+
+  it("notifies a parent subagent when its background nested child completes without polling", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "nested-e2e-notify-"));
+    tmpDirs.push(cwd);
+    writeAgents(cwd);
+
+    let workerCalls = 0;
+    let orchestratorSawNotification = false;
+
+    const respond = async (context: Context): Promise<FauxReply> => {
+      const text = firstUserText(context);
+
+      if (text.includes("Do the leaf work")) {
+        workerCalls++;
+        // Delay slightly so the orchestrator finishes its initial turn before the worker completes.
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return WORKER_MARKER;
+      }
+
+      if (text.includes("Delegate this downward")) {
+        const notification = context.messages
+          .filter((m) => m.role === "user")
+          .map((m) =>
+            typeof m.content === "string"
+              ? m.content
+              : ((m.content ?? []) as Array<{ text?: string }>).map((b) => b.text ?? "").join(""),
+          )
+          .find((t) => t.includes("<task-notification>"));
+        if (notification) {
+          orchestratorSawNotification = true;
+          return `orchestrator notified: ${notification}`;
+        }
+        const results = toolResultTexts(context);
+        if (results.some((r) => r.name === "Agent")) {
+          // Finish the turn cleanly without calling get_subagent_result — the
+          // parent must stay open for its active background child and wake up
+          // when <task-notification> arrives.
+          return "Waiting for background worker notification.";
+        }
+        return agentCall({
+          subagent_type: "worker",
+          description: "leaf work",
+          prompt: "Do the leaf work.",
+          run_in_background: true,
+        });
+      }
+
+      if (toolResultTexts(context).some((r) => r.name === "Agent")) {
+        return toolResultTexts(context).find((r) => r.name === "Agent")!.text;
+      }
+      return agentCall({
+        subagent_type: "orchestrator",
+        description: "delegate",
+        prompt: "Delegate this downward.",
+        run_in_background: false,
+      });
+    };
+
+    run = await runPrintMode({
+      prompt: "Delegate the work.",
+      cwd,
+      respond,
+      live: false,
+      beforeRun: () => { registerAgents(loadCustomAgents(cwd)); },
+    });
+
+    expect(workerCalls).toBe(1);
+    expect(orchestratorSawNotification).toBe(true);
+    expect(run.responseText).toContain("<task-notification>");
+    expect(run.responseText).toContain(WORKER_MARKER);
+  });
 });

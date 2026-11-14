@@ -1482,6 +1482,23 @@ async function executeDurableAgentPrompt(
           await Promise.all(admissions);
           if (admissionError) throw admissionError;
           await conversation.waitForIdle(baseContext);
+          if (
+            admitted === admissions.length &&
+            !options.signal?.aborted &&
+            !run.aborted &&
+            !run.steered &&
+            !lastStreamError &&
+            !finalTurnError(session, startIndex)
+          ) {
+            try {
+              await options.nestedRuntime?.manager.waitForBackgroundChild?.(
+                options.nestedRuntime.parentAgentId,
+                options.signal,
+              );
+            } catch (err) {
+              if (!options.signal?.aborted && !run.aborted) throw err;
+            }
+          }
         } while (admitted !== admissions.length);
       };
       await drainAdmissions();

@@ -26,6 +26,7 @@ export interface ResumeDeps {
   abort: (id: string) => boolean;
   drainQueue: () => void;
   abortOwnedChildren: (id: string) => void;
+  waitForBackgroundChild?: (parentId: string, signal?: AbortSignal) => Promise<boolean>;
   onComplete?: (record: AgentRecord) => void;
   onStart?: (record: AgentRecord) => void;
   onUsage?: (record: AgentRecord, usage: LifetimeUsage) => void;
@@ -202,6 +203,7 @@ export async function resumeRecord(
       options?.onCompaction?.(info);
     },
     signal: abortController.signal,
+    waitForBackgroundChild: () => deps.waitForBackgroundChild?.(id, abortController.signal) ?? Promise.resolve(false),
   };
 
   const session = record.session;
@@ -305,6 +307,7 @@ export function startResume(
       options.onCompaction?.(info);
     },
     signal: abortController.signal,
+    waitForBackgroundChild: () => deps.waitForBackgroundChild?.(id, abortController.signal) ?? Promise.resolve(false),
   };
 
   const promise = (prompt === undefined

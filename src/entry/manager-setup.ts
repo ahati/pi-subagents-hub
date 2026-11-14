@@ -138,8 +138,33 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
     30_000,
   );
 
+  function notifyParentOfNestedCompletion(record: AgentRecord): void {
+    if (record.parentAgentId === undefined) return;
+    if (!record.isBackground || record.status === "paused" || record.resultConsumed) return;
+    const owner = manager.getRecord(record.parentAgentId);
+    if (!owner || (owner.status !== "running" && owner.status !== "paused")) return;
+    if (owner.waitingChildIds?.has(record.id)) return;
+    const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : "";
+    const message = `${formatTaskNotification(record, 500, isShowCostEnabled())}${footer}\n\nUse get_subagent_result for full output.`;
+    if (!owner.session) {
+      owner.pendingSteers = [...(owner.pendingSteers ?? []), message];
+      return;
+    }
+    owner.pendingChildNotifications ??= new Set();
+    const delivery: Promise<void> = owner.session.steer(message).then(
+      () => undefined,
+      (err) => { console.error("[pi-subagents-hub] nested completion notification failed:", err); },
+    ).finally(() => {
+      owner.pendingChildNotifications?.delete(delivery);
+    });
+    owner.pendingChildNotifications.add(delivery);
+  }
+
   const manager = new AgentManager((record) => {
-    if (!isTopLevelAgent(record)) return;
+    if (!isTopLevelAgent(record)) {
+      notifyParentOfNestedCompletion(record);
+      return;
+    }
     const currentCtx = getCurrentCtx();
     if (currentCtx) syncPauseManifest(currentCtx, park, manager);
 

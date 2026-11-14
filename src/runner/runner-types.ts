@@ -225,4 +225,6 @@ export interface ResumeAgentOptions {
   signal?: AbortSignal;
   /** Override tool execution for the bare continuation (healing/seam injection). */
   execute?: BareToolExecutor;
+  /** Wait for any active nested background children (and their steers) before finishing. */
+  waitForBackgroundChild?: () => Promise<boolean>;
 }

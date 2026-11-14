@@ -217,6 +217,10 @@ export interface AgentRecord {
   seenToolCalls?: Set<string>;
   /** Number of active nested calls waiting for a child to return. */
   waitingForChildren?: number;
+  /** Child record IDs currently awaited inline by `get_subagent_result(wait: true)`. */
+  waitingChildIds?: Set<string>;
+  /** Pending steer deliveries notifying this agent about settled nested children. */
+  pendingChildNotifications?: Set<Promise<void>>;
   startedAt: number;
   completedAt?: number;
   session?: AgentSession;

@@ -59,10 +59,9 @@ export interface SubagentsSettings {
    * the previous behaviour, where an unqualified spawn blocked the turn and
    * returned its result inline.
    *
-   * Top-level only. Nested spawns (a subagent spawning its own) always default
-   * to foreground regardless of this setting — see `nested-tools.ts`, where a
-   * detached child would be killed by `abortOwnedChildren` when its parent
-   * settles, with no notification path to deliver its result.
+   * Top-level only. Nested spawns (a subagent spawning its own) still default
+   * to foreground so simple sub-tasks return inline; explicit `run_in_background: true`
+   * delivers a `<task-notification>` completion steer to the parent when the child finishes.
    *
    * An explicit `run_in_background` on the call, or in the agent file's
    * frontmatter, overrides this in both directions; the setting only decides
