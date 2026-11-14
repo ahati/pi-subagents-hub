@@ -230,6 +230,107 @@ describe("Agent({ resume }) once the live record is gone", () => {
     expect(runAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the saved model, provider, and thinking instead of falling back to the parent's", async () => {
+    const parentModel = { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" };
+    const childModel = { provider: "pool", id: "DeepSeek-Flash", name: "DeepSeek-Flash" };
+    const registry = {
+      find: vi.fn((provider: string, id: string) =>
+        provider === "pool" && id === "DeepSeek-Flash" ? childModel : undefined,
+      ),
+      getAll: vi.fn(() => [parentModel, childModel]),
+      getAvailable: vi.fn(() => [parentModel, childModel]),
+    };
+
+    const branch: any[] = [];
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, options: any) => {
+      const session = {
+        dispose: vi.fn(),
+        messages: [],
+        model: options.model,
+        thinkingLevel: options.thinkingLevel,
+        subscribe: vi.fn(() => () => {}),
+        sessionManager: { getSessionFile: () => sessionFile },
+      } as any;
+      options.onSessionCreated?.(session);
+      return { responseText: "FIRST-RUN", session, aborted: false, steered: false };
+    });
+
+    const first = boot(branch);
+    const { tools, lifecycle } = makePi();
+    await first.lifecycle.get("session_shutdown")?.();
+    delete (globalThis as any)[MANAGER_KEY];
+
+    const piBoot = makePi();
+    piBoot.pi.appendEntry = vi.fn((customType: string, data: unknown) => branch.push({ type: "custom", customType, data }));
+    subagentsExtension(piBoot.pi);
+    booted = piBoot.lifecycle;
+    const context = ctx({
+      model: parentModel,
+      modelRegistry: registry,
+      sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => branch) },
+    });
+    const firstRes = await piBoot.tools.get("Agent").execute(
+      "tc-1",
+      {
+        prompt: "Review the change.",
+        description: "Review",
+        subagent_type: "Explore",
+        model: "pool/DeepSeek-Flash",
+        thinking: "max",
+        run_in_background: false,
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    const id = (firstRes as any).details.agentId;
+    expect(branch.at(-1).data).toMatchObject({ modelId: "pool/DeepSeek-Flash", thinking: "max" });
+
+    // Simulate reload/restart where the live record is gone.
+    await piBoot.lifecycle.get("session_shutdown")?.();
+    delete (globalThis as any)[MANAGER_KEY];
+    const secondBoot = makePi();
+    subagentsExtension(secondBoot.pi);
+    booted = secondBoot.lifecycle;
+    const secondCtx = ctx({
+      model: parentModel,
+      modelRegistry: registry,
+      sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => branch) },
+    });
+    await secondBoot.tools.get("Agent").execute(
+      "tc-2",
+      { prompt: "Continue.", description: "Review", subagent_type: "Explore", resume: id, run_in_background: false },
+      undefined,
+      undefined,
+      secondCtx,
+    );
+    const [, , , resumeOpts] = vi.mocked(runAgent).mock.lastCall!;
+    expect(resumeOpts.model).toBe(childModel);
+    expect(resumeOpts.thinkingLevel).toBe("max");
+
+    // Older saved records without modelId/thinking must NOT pass ctx.model,
+    // leaving runner-session free to restore them from the saved .jsonl file.
+    delete branch.at(-1).data.modelId;
+    delete branch.at(-1).data.thinking;
+    await secondBoot.lifecycle.get("session_shutdown")?.();
+    delete (globalThis as any)[MANAGER_KEY];
+    const thirdBoot = makePi();
+    subagentsExtension(thirdBoot.pi);
+    booted = thirdBoot.lifecycle;
+    await thirdBoot.tools.get("Agent").execute(
+      "tc-3",
+      { prompt: "Continue again.", description: "Review", subagent_type: "Explore", resume: id, run_in_background: false },
+      undefined,
+      undefined,
+      secondCtx,
+    );
+    const [, , , legacyOpts] = vi.mocked(runAgent).mock.lastCall!;
+    expect(legacyOpts.model).toBeUndefined();
+    expect(legacyOpts.thinkingLevel).toBeUndefined();
+    void tools;
+    void lifecycle;
+  });
+
   it("still refuses to combine resume with schedule", async () => {
     const branch: any[] = [];
     const id = await finishedAgent(branch);

@@ -1179,6 +1179,45 @@ describe("agent-runner session persistence", () => {
     expect(sessionManagerForkFrom).not.toHaveBeenCalled();
   });
 
+  it("restores saved session model, provider, and thinking on reopen instead of falling back to parent", async () => {
+    const parentModel = { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" };
+    const savedVirtualModel = { provider: "pool", id: "DeepSeek-Flash", name: "DeepSeek-Flash", api: "pi-virtual" };
+    const routedPhysicalModel = { provider: "deepseek", id: "deepseek-chat", name: "DeepSeek Chat", api: "openai-completions" };
+    const reopenCtx = {
+      ...ctx,
+      model: parentModel,
+      thinkingLevel: "low",
+      modelRegistry: {
+        find: vi.fn((provider: string, id: string) => {
+          if (provider === "pool" && id === "DeepSeek-Flash") return savedVirtualModel;
+          if (provider === "deepseek" && id === "deepseek-chat") return routedPhysicalModel;
+          return undefined;
+        }),
+        getAll: vi.fn(() => [parentModel, savedVirtualModel, routedPhysicalModel]),
+      },
+    } as any;
+
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ model: undefined, thinking: "minimal" }));
+    sessionManagerOpen.mockReturnValueOnce({
+      kind: "reopened-session-manager",
+      getHeader: () => ({ parentSession: "/sessions/parent.jsonl" }),
+      getCwd: () => "/child-cwd",
+      getBranch: () => [
+        { type: "model_change", provider: "pool", modelId: "DeepSeek-Flash" },
+        { type: "thinking_level_change", thinkingLevel: "max" },
+        { type: "message", message: { role: "assistant", provider: "deepseek", model: "deepseek-chat", api: "openai-completions", content: [] } },
+      ],
+    } as any);
+    createAgentSession.mockResolvedValueOnce({ session: createSession("OK").session });
+
+    await runAgent(reopenCtx, "Explore", "carry on", { pi, resumeSessionFile: "/sessions/explore.jsonl" });
+
+    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: savedVirtualModel,
+      thinkingLevel: "max",
+    }));
+  });
+
   it("uses pi's normal persistent session location and links to the parent session", async () => {
     vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
     settingsManagerGetSessionDir.mockReturnValue("/normal/pi/sessions");

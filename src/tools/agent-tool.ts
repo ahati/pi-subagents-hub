@@ -182,8 +182,21 @@ export function createAgentTool(deps: AgentToolDeps) {
         defaultRunInBackground: getBackgroundByDefault(),
       });
 
-      let model = ctx.model;
-      if (resolvedConfig.modelInput) {
+      let model: any = reopenOptions !== undefined ? undefined : ctx.model;
+      if (reopenOptions !== undefined) {
+        if (saved?.modelId) {
+          const slash = saved.modelId.indexOf("/");
+          const exact = slash !== -1
+            ? ctx.modelRegistry?.find?.(saved.modelId.slice(0, slash), saved.modelId.slice(slash + 1))
+            : undefined;
+          if (exact) {
+            model = exact;
+          } else {
+            const resolved = resolveModel(saved.modelId, ctx.modelRegistry);
+            if (typeof resolved !== "string") model = resolved;
+          }
+        }
+      } else if (resolvedConfig.modelInput) {
         const resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
         if (typeof resolved === "string") {
           if (resolvedConfig.modelFromParams) return textResult(resolved);
@@ -196,14 +209,16 @@ export function createAgentTool(deps: AgentToolDeps) {
         model,
         cwd: ctx.cwd,
         modelRegistry: ctx.modelRegistry,
-        callerSupplied: resolvedConfig.modelFromParams,
+        callerSupplied: reopenOptions === undefined && resolvedConfig.modelFromParams,
         agentLabel: customConfig?.displayName ?? subagentType,
-        modelInput: resolvedConfig.modelInput,
+        modelInput: reopenOptions === undefined ? resolvedConfig.modelInput : saved?.modelId,
       });
       if (scopeVerdict.kind === "error") return textResult(scopeVerdict.message);
       if (scopeVerdict.kind === "warn") ctx.ui.notify(scopeVerdict.message, "warning");
 
-      const thinking = resolvedConfig.thinking;
+      const thinking = reopenOptions !== undefined
+        ? (saved?.thinking && saved.thinking !== "off" ? saved.thinking : undefined)
+        : resolvedConfig.thinking;
       const inheritContext = resolvedConfig.inheritContext;
       const runInBackground = resolvedConfig.runInBackground;
       const isolated = resolvedConfig.isolated;

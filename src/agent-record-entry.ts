@@ -17,7 +17,7 @@ import { existsSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveSpawnType } from "./agent-types.js";
 import { getStatusNote, partialOutputSuffix } from "./status-note.js";
-import type { AgentRecord, SubagentType } from "./types.js";
+import type { AgentRecord, EffectiveThinkingLevel, SubagentType } from "./types.js";
 import { formatAge, formatDuration, getDisplayName } from "./ui/agent-widget.js";
 
 /** `customType` of the session entry a finished top-level agent appends. */
@@ -43,6 +43,9 @@ export interface AgentRecordEntryData {
   handle?: string;
   alias?: string;
   autoNamed?: boolean;
+  /** Last resolved `provider/id` and thinking level, preserved for reopened resumes. */
+  modelId?: string;
+  thinking?: EffectiveThinkingLevel;
   /** Set when the agent's work lived in a worktree that is now gone — see {@link worktreeLost}. */
   worktreeLost?: boolean;
 }
@@ -75,6 +78,8 @@ export function agentRecordEntryData(record: AgentRecord): AgentRecordEntryData 
     handle: record.handle,
     alias: record.alias,
     autoNamed: record.autoNamed,
+    modelId: record.invocation?.modelId,
+    thinking: record.invocation?.thinking,
     worktreeLost: worktreeLost(record) || undefined,
   };
 }
