@@ -293,7 +293,8 @@ export default function (pi: ExtensionAPI) {
       const record = resolveAgentRef(id);
       return record !== undefined && isTopLevelAgent(record) ? record : undefined;
     },
-    revivePausedEntry: (ctx: ExtensionContext, entry: any) => continuePausedEntry(ctx, entry, pauseDeps),
+    revivePausedEntry: (ctx: ExtensionContext, entry: any, parentIdMap?: Map<string, string>) =>
+      continuePausedEntry(ctx, entry, pauseDeps, parentIdMap),
     relaunchPausedWorkflow: (ctx: ExtensionContext, entry: any) =>
       pauseDeps.relaunchWorkflow ? pauseDeps.relaunchWorkflow(ctx, entry) : Promise.resolve(false),
     manager,
@@ -338,7 +339,12 @@ export default function (pi: ExtensionAPI) {
   fleet.setLifecycleActions({
     pause: (id) => {
       const record = manager.getRecord(id);
-      return record ? pauseAgentRecord(record, pi, manager) : "no such agent";
+      if (!record) return "no such agent";
+      const refusal = pauseAgentRecord(record, pi, manager);
+      if (refusal === undefined && currentCtx) {
+        syncPauseManifest(currentCtx, park, manager, workflowTasks);
+      }
+      return refusal;
     },
     resume: (id) => {
       const record = manager.getRecord(id);
@@ -490,6 +496,15 @@ export default function (pi: ExtensionAPI) {
     startBackgroundResume,
     joinTurnGroup,
     resolveAgentRef,
+    onPausedStateChanged: async (ctx, parent) => {
+      if (parent) {
+        for (const child of manager.listAgents()) {
+          if (child.parentAgentId === parent.id && child.workflowId === undefined && child.status === "paused") {
+            await resumeAgentById(ctx, child, pauseDeps);
+          }
+        }
+      }
+    },
   });
 
   const registeredAgentTool = withUsageReporting(agentTool, () => reportUsage, pendingUsage);

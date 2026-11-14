@@ -61,6 +61,7 @@ export interface AgentToolSpawnDeps {
   ) => Promise<AgentRecord | undefined>;
   joinTurnGroup: (id: string, joinMode: JoinMode | undefined) => void;
   resolveAgentRef: (ref: string) => AgentRecord | undefined;
+  onPausedStateChanged?: (ctx: ExtensionContext, resumedParent?: AgentRecord) => Promise<void> | void;
 }
 
 /** Composite dependencies for creating the Agent tool (satisfies ISP via segregated sub-interfaces). */
@@ -86,6 +87,7 @@ export function createAgentTool(deps: AgentToolDeps) {
     startBackgroundResume,
     joinTurnGroup,
     resolveAgentRef,
+    onPausedStateChanged,
   } = deps;
 
   const description = buildAgentToolDescription({
@@ -334,6 +336,7 @@ export function createAgentTool(deps: AgentToolDeps) {
 
         if (runInBackground) {
           const id = existing.id;
+          const wasPaused = existing.status === "paused";
 
           const record = await startBackgroundResume(ctx, existing, params.prompt as string | undefined, {
             outputTranscript,
@@ -343,6 +346,7 @@ export function createAgentTool(deps: AgentToolDeps) {
           if (!record) {
             return textResult(`Failed to resume agent "${resumeId}".`);
           }
+          if (wasPaused) await onPausedStateChanged?.(ctx, record);
 
           const isQueued = record.status === "queued";
           return textResult(
@@ -357,6 +361,7 @@ export function createAgentTool(deps: AgentToolDeps) {
           );
         }
 
+        const wasPaused = existing.status === "paused";
         const { state: resumeState, callbacks: resumeCallbacks } = createActivityTracker(resumeMaxTurns);
         resumeState.session = existing.session;
         agentActivity.set(existing.id, resumeState);
@@ -372,6 +377,7 @@ export function createAgentTool(deps: AgentToolDeps) {
             onToolActivity: resumeCallbacks.onToolActivity,
           });
         } finally {
+          if (wasPaused) await onPausedStateChanged?.(ctx, record ?? existing);
           agentActivity.delete(existing.id);
           widget.markFinished(existing.id);
           fleet.onAgentFinished(existing.id);

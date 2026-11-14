@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../agent-manager.js";
 import { getAgentConfig, getAvailableTypes, getConfig } from "../agent-types.js";
-import { type PauseContinueDeps, reviveTombstone } from "../commands/pause-continue.js";
+import { type PauseContinueDeps, resumeAgentById, reviveTombstone } from "../commands/pause-continue.js";
 import {
   describeMention,
   handleBase,
@@ -112,10 +112,18 @@ export function registerMentionInputHook(pi: ExtensionAPI, deps: MentionHookDeps
       }
 
       if (record.session) {
+        const wasPaused = record.status === "paused";
         const resumedRecord = await startBackgroundResume(ctx, record, mention.message, {
           outputTranscript: getAgentConfig(record.type)?.outputTranscript ?? getOutputTranscriptDefault(),
           maxTurns: resumeTurnLimit(record),
         });
+        if (resumedRecord && wasPaused) {
+          for (const child of manager.listAgents()) {
+            if (child.parentAgentId === record.id && child.workflowId === undefined && child.status === "paused") {
+              await resumeAgentById(ctx, child, pauseDeps);
+            }
+          }
+        }
         ctx.ui.notify(
           resumedRecord ? `Resuming ${target}` : `Could not resume ${target} — it is still running.`,
           resumedRecord ? "info" : "warning",

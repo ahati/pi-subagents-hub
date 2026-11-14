@@ -39,6 +39,7 @@ import {
   pauseAgentRecord,
   resumeAgentById,
   reviveTombstone,
+  syncPauseManifest,
 } from "./pause-continue.js";
 import { recordName } from "./pause-state.js";
 
@@ -104,13 +105,14 @@ export async function pauseAgentsCommand(ctx: ExtensionCommandContext, target: s
       ctx.ui.notify(`Could not pause @${name} — ${refusal}.`, "warning");
       return;
     }
+    syncPauseManifest(ctx, park, manager, deps.workflowTasks);
     deps.widget?.update();
     deps.fleet?.update();
     ctx.ui.notify(`Paused @${name}.`, "info");
     return;
   }
 
-  const captured = park.captureSettledResults(ctx, manager, () => deps.reloadCustomAgents());
+  const captured = park.captureSettledResults(ctx, manager, c => syncPauseManifest(c, park, manager, deps.workflowTasks));
   const active = manager.listAgents().filter(isTopLevelAgent)
     .filter(a => a.status === "running" || a.status === "queued");
   if (active.length === 0) {
@@ -128,6 +130,7 @@ export async function pauseAgentsCommand(ctx: ExtensionCommandContext, target: s
     if (pauseAgentRecord(record, pi, manager) === undefined) paused++;
     else skipped++;
   }
+  syncPauseManifest(ctx, park, manager, deps.workflowTasks);
   deps.widget?.update();
   deps.fleet?.update();
   ctx.ui.notify(

@@ -205,7 +205,12 @@ export function registerSessionLifecycle(
           abort: (id) => manager.abort(id),
           pauseAgent: (id) => {
             const record = manager.getRecord(id);
-            return record !== undefined && pauseAgentRecord(record) === undefined;
+            const paused = record !== undefined && pauseAgentRecord(record) === undefined;
+            if (paused) {
+              const activeCtx = getCurrentCtx();
+              if (activeCtx) syncPauseManifest(activeCtx);
+            }
+            return paused;
           },
           resumeAgent: (id, prompt) => {
             const record = manager.getRecord(id);

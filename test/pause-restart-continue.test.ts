@@ -402,6 +402,21 @@ describe("M1 shadow continuation (continueSessionBare)", () => {
     expect(manager.getBranch().length, "a completed transcript must not gain entries").toBe(entriesBefore);
   });
 
+  it("continues when the transcript ended on assistant text but queued steering messages are pending", async () => {
+    const manager = seedTranscript(dir!, [], [], "prior answer", { stopReason: "stop" });
+    const session = shadowSession(manager, [{ name: "read" }]);
+    session.agent.hasQueuedMessages = vi.fn(() => true);
+    session.agent.continue.mockImplementation(async () => {
+      manager.appendMessage(assistantMessage([], "after queued notification"));
+    });
+
+    const result = await continueBare(session);
+
+    expect(session.agent.continue).toHaveBeenCalledTimes(1);
+    expect(session.agent.waitForIdle).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ executed: 0, errors: 0, finalText: "after queued notification" });
+  });
+
   it("a completed transcript WITH an unanswered tool call still heals and continues", async () => {
     const pending = { id: "tc1", name: "read", arguments: { path: "a.ts" } };
     const manager = seedTranscript(dir!, [pending]);

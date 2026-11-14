@@ -21,6 +21,23 @@ export function recordName(record: AgentRecord): string {
   return (!record.autoNamed && record.alias) ? record.alias : (record.handle ?? record.alias ?? record.id);
 }
 
+/**
+ * Pause every active background descendant of `parentId` recursively.
+ * Does not emit top-level events or surface individual ownership refusals.
+ */
+export function pauseOwnedBackgroundChildren(parentId: string, manager: AgentManager): number {
+  let paused = 0;
+  const agents = manager.listAgents();
+  for (const child of agents) {
+    if (child.parentAgentId !== parentId || child.workflowId !== undefined) continue;
+    if ((child.status === "running" || child.status === "queued") && child.isBackground === true && !child.worktree) {
+      if (manager.pause(child.id)) paused++;
+    }
+    paused += pauseOwnedBackgroundChildren(child.id, manager);
+  }
+  return paused;
+}
+
 export class ParkGateController {
   armedPause = false;
   mainTurnSwitchInProgress = false;
@@ -101,6 +118,10 @@ export class ParkGateController {
       description: record.description,
       sessionFile: record.sessionFile,
       pausedAt: new Date().toISOString(),
+      ...(record.parentAgentId !== undefined ? { parentAgentId: record.parentAgentId } : {}),
+      ...(record.depth !== undefined ? { depth: record.depth } : {}),
+      ...(record.maxSubagentDepth !== undefined ? { maxSubagentDepth: record.maxSubagentDepth } : {}),
+      ...(record.rootSessionId !== undefined ? { rootSessionId: record.rootSessionId } : {}),
       ...(status
         ? {
             status,
@@ -136,6 +157,10 @@ export class ParkGateController {
       description: record.description,
       respawn,
       pausedAt: new Date().toISOString(),
+      ...(record.parentAgentId !== undefined ? { parentAgentId: record.parentAgentId } : {}),
+      ...(record.depth !== undefined ? { depth: record.depth } : {}),
+      ...(record.maxSubagentDepth !== undefined ? { maxSubagentDepth: record.maxSubagentDepth } : {}),
+      ...(record.rootSessionId !== undefined ? { rootSessionId: record.rootSessionId } : {}),
     };
   }
 

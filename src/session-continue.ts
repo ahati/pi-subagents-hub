@@ -70,6 +70,7 @@ export interface BareContinueSession {
     };
     continue(): Promise<void>;
     waitForIdle(): Promise<void>;
+    hasQueuedMessages?(): boolean;
     beforeToolCall?: RunToolCallOptions["beforeToolCall"];
     afterToolCall?: RunToolCallOptions["afterToolCall"];
   };
@@ -342,7 +343,7 @@ export async function continueSessionBare(
   const healedBranch = sessionManager.getBranch();
   const lastMessage = lastBranchMessage(healedBranch);
   const lastText = lastMessage?.role === "assistant" ? assistantText(lastMessage) : "";
-  if (lastText && unansweredToolCalls(healedBranch)?.calls.length === 0) {
+  if (lastText && unansweredToolCalls(healedBranch)?.calls.length === 0 && !agent.hasQueuedMessages?.()) {
     return { executed, errors, alreadyComplete: true, finalText: lastText };
   }
 

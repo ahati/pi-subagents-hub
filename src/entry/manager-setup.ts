@@ -238,8 +238,9 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
     opts: { outputTranscript: boolean; maxTurns?: number; toolCallId?: string },
   ): Promise<AgentRecord | undefined> {
     const id = existing.id;
+    const isTopLevel = isTopLevelAgent(existing);
     const isGated = gateOf(existing)?.closed === true;
-    const joinMode = resolveJoinMode(getDefaultJoinMode(), true);
+    const joinMode = isTopLevel ? resolveJoinMode(getDefaultJoinMode(), true) : undefined;
     existing.toolCallId = opts.toolCallId;
     if (joinMode) existing.joinMode = joinMode;
     if (opts.outputTranscript) {
@@ -272,18 +273,20 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
     });
     if (!record) return undefined;
 
-    if (opts.toolCallId !== undefined) joinTurnGroup(id, joinMode);
+    if (isTopLevel && opts.toolCallId !== undefined) joinTurnGroup(id, joinMode);
 
     if (bgState) {
       agentActivity.set(id, bgState);
     }
-    widget.markRunning(id);
-    widget.ensureTimer();
-    widget.update();
+    if (isTopLevel) {
+      widget.markRunning(id);
+      widget.ensureTimer();
+      widget.update();
+    }
     fleet.ensureTimer();
     fleet.update();
 
-    if (!isGated) {
+    if (isTopLevel && !isGated) {
       pi.events.emit("subagents:created", {
         id,
         type: existing.type,

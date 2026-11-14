@@ -1233,3 +1233,136 @@ describe("captured result status", () => {
     expect(row.error).toBe("boom");
   });
 });
+
+describe("pause manifest sync across surfaces and nested children", () => {
+  it("syncs PauseStore on /agents pause (single and bulk), fleet pause, and RPC pause", async () => {
+    hermetic = hermeticDir({ settings: { outputTranscript: false } });
+    const b = makePi();
+    const busHandlers = new Map<string, (raw: any) => unknown>();
+    b.pi.events.on = vi.fn((event: string, handler: (raw: any) => unknown) => {
+      busHandlers.set(event, handler);
+      return vi.fn();
+    });
+    subagentsExtension(b.pi);
+    booted = b.lifecycle;
+
+    await b.lifecycle.get("session_start")({ type: "session_start", reason: "startup" }, ctx());
+    const id1 = await spawnRunning(b, resumableSession, "agent one");
+    const id2 = await spawnRunning(b, resumableSession, "agent two");
+
+    // Single-target /agents pause writes the manifest immediately.
+    await b.commands.get("agents").handler("pause @explore", idleCtx());
+    await flush();
+    expect(manifest().list().map(e => e.id)).toEqual([id1]);
+
+    // RPC pause writes the manifest too.
+    await busHandlers.get("subagents:rpc:pause")!({ requestId: "req-sync", agentId: id2 });
+    await flush();
+    expect(new Set(manifest().list().map(e => e.id))).toEqual(new Set([id1, id2]));
+
+    // Resume both via /agents resume, then test bulk /agents pause.
+    await b.commands.get("agents").handler("resume", idleCtx());
+    await flush();
+    await b.commands.get("agents").handler("pause", idleCtx());
+    await flush();
+    expect(new Set(manifest().list().map(e => e.id))).toEqual(new Set([id1, id2]));
+  });
+
+  it("pauses and resumes nested background children alongside their paused parent, and restores them across restart", async () => {
+    const b = boot();
+    await b.lifecycle.get("session_start")({ type: "session_start", reason: "startup" }, ctx());
+    const parentId = await spawnRunning(b, resumableSession, "parent agent");
+
+    // Spawn an active nested background child under the parent.
+    let childSession!: any;
+    vi.mocked(runAgent).mockImplementationOnce(
+      (_ctx: any, _type: any, _prompt: any, opts: any) =>
+        new Promise(() => {
+          childSession = {
+            ...resumableSession(),
+            sessionManager: { getSessionFile: () => join(hermetic!.dir, "child-session.jsonl") },
+          };
+          opts.onSessionCreated?.(childSession);
+        }) as any,
+    );
+    const mgr = manager().manager;
+    const childId = mgr.spawn(b.pi, ctx(), "Explore", "child work", {
+      description: "nested child",
+      isBackground: true,
+      parentAgentId: parentId,
+      depth: 2,
+      maxSubagentDepth: 3,
+      rootSessionId: "s1",
+    });
+    await flush();
+    expect(mgr.getRecord(childId)?.status).toBe("running");
+
+    // /pause pauses both parent and child, writing both to the manifest while
+    // keeping the top-level summary scoped to 1 top-level agent.
+    const { cmdCtx } = runCommand(b, "pause");
+    await flush();
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith("Paused 1 agent.", "info");
+    expect(mgr.getRecord(parentId)?.status).toBe("paused");
+    expect(mgr.getRecord(childId)?.status).toBe("paused");
+    const rows = manifest().list();
+    expect(rows.map(r => r.id)).toEqual([parentId, childId]);
+    expect(rows[1].parentAgentId).toBe(parentId);
+    expect(rows[1].depth).toBe(2);
+
+    // In-session /continue resumes both parent and child.
+    await runCommand(b, "continue").result;
+    await flush();
+    expect(mgr.getRecord(parentId)?.status).toBe("running");
+    expect(mgr.getRecord(childId)?.status).toBe("running");
+
+    // Re-pause before simulating a restart so both sit in the manifest.
+    await runCommand(b, "pause").result;
+    await flush();
+    expect(manifest().list()).toHaveLength(2);
+
+    // Simulate restart: seed existing session files on disk, shut down, and reboot.
+    writeFileSync(join(hermetic!.dir, "agent-session.jsonl"), "{\"type\":\"session\"}\n");
+    writeFileSync(join(hermetic!.dir, "child-session.jsonl"), "{\"type\":\"session\"}\n");
+    await b.lifecycle.get("session_shutdown")?.();
+    delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+
+    const b2 = bootOnly();
+    await b2.lifecycle.get("session_start")({ type: "session_start", reason: "startup" }, ctx());
+
+    const spawnedRevivals: Array<{ agentId: string; resumeSessionFile?: string; nested?: boolean }> = [];
+    vi.mocked(runAgent).mockImplementation(
+      (_ctx: any, _type: any, _prompt: any, opts: any) =>
+        new Promise(() => {
+          spawnedRevivals.push({
+            agentId: opts.agentId,
+            resumeSessionFile: opts.resumeSessionFile,
+            nested: opts.nested,
+          });
+          opts.onSessionCreated?.(resumableSession());
+        }) as any,
+    );
+
+    const contCtx = ctx({ isIdle: () => true });
+    await b2.commands.get("continue").handler("", contCtx);
+    await flush();
+
+    // Parent is revived first (new top-level id), then the nested child under its original ID and rebound parentAgentId.
+    expect(spawnedRevivals).toHaveLength(2);
+    expect(spawnedRevivals[0]).toEqual({
+      agentId: expect.any(String),
+      resumeSessionFile: join(hermetic!.dir, "agent-session.jsonl"),
+      nested: false,
+    });
+    expect(spawnedRevivals[1]).toEqual({
+      agentId: childId,
+      resumeSessionFile: join(hermetic!.dir, "child-session.jsonl"),
+      nested: true,
+    });
+    const revivedParentId = spawnedRevivals[0].agentId;
+    const mgr2 = manager().manager;
+    expect(mgr2.getRecord(childId)?.parentAgentId).toBe(revivedParentId);
+    expect(mgr2.getRecord(childId)?.depth).toBe(2);
+    expect(contCtx.ui.notify).toHaveBeenCalledWith("Continued 1 agent.", "info");
+    expect(manifest().list()).toEqual([]);
+  });
+});

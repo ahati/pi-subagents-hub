@@ -68,6 +68,11 @@ export interface PausedAgentEntry {
   respawn?: PausedRespawnSpec;
   /** ISO timestamp of when the pause landed (kept across re-syncs). */
   pausedAt: string;
+  /** Set for nested background children parked alongside their parent agent. */
+  parentAgentId?: string;
+  depth?: number;
+  maxSubagentDepth?: number;
+  rootSessionId?: string;
   /**
    * The outcome the captured run settled with. Additive within manifest
    * version 3 — absent on rows written before this field existed and on rows
