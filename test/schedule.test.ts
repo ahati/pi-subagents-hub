@@ -564,3 +564,47 @@ describe("SubagentScheduler — stopped state", () => {
     expect(scheduler.list()).toEqual([]);
   });
 });
+
+describe("SubagentScheduler — >24.85-day timer overflow guard", () => {
+  it("does not fire +30d one-shot or 30d interval jobs immediately", () => {
+    vi.useFakeTimers();
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "schedule-long-test-"));
+      try {
+        const store = new ScheduleStore(join(dir, "s.json"));
+        const manager = {
+          spawn: vi.fn(() => "agent-1"),
+          awaitStartup: vi.fn(async () => {}),
+          getRecord: vi.fn(),
+        };
+        const pi = { events: { emit: vi.fn() } };
+        const ctx = { cwd: dir, modelRegistry: { find: vi.fn(), getAvailable: () => [] } };
+        const scheduler = new SubagentScheduler();
+        scheduler.start(pi as any, ctx as any, manager as any, store);
+
+        scheduler.addJob({
+          name: "far-once", description: "x", schedule: "+30d",
+          subagent_type: "general-purpose", prompt: "once",
+        });
+        scheduler.addJob({
+          name: "far-interval", description: "x", schedule: "30d",
+          subagent_type: "general-purpose", prompt: "interval",
+        });
+
+        vi.advanceTimersByTime(10_000);
+        expect(manager.spawn).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(25 * 86_400_000);
+        expect(manager.spawn).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(5 * 86_400_000 + 1_000);
+        expect(manager.spawn).toHaveBeenCalledTimes(2);
+        scheduler.stop();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

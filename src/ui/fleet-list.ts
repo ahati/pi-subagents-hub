@@ -542,8 +542,12 @@ export class FleetList {
       this.ui?.notify("Nested subagents are managed by their parent agent and cannot be paused directly", "warning");
       return;
     }
-    if (status === "running" || status === "queued") this.lifecycleActions.pause(id);
-    else if (status === "paused") this.lifecycleActions.resume(id);
+    if (status === "running" || status === "queued") {
+      const refusal = this.lifecycleActions.pause(id);
+      if (refusal !== undefined) this.ui?.notify(`Could not pause — ${refusal}.`, "warning");
+    } else if (status === "paused") {
+      if (!this.lifecycleActions.resume(id)) this.ui?.notify("Could not resume agent.", "warning");
+    }
     this.update();
   }
 

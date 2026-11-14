@@ -1577,4 +1577,23 @@ describe("FleetList Claude Code nested subagents & auto-expand", () => {
     expect(pauseFn).not.toHaveBeenCalled();
     expect(h.notices().some(n => n.includes("Nested subagents are managed by their parent agent"))).toBe(true);
   });
+
+  it("surfaces pause refusal reasons and failed resumes from lifecycle actions", () => {
+    const pauseFn = vi.fn(() => "worktree-isolated runs cannot pause");
+    const resumeFn = vi.fn(() => false);
+    const a1 = makeRecord({ id: "a1", description: "Worktree agent", status: "running", startedAt: 100 });
+    const a2 = makeRecord({ id: "a2", description: "Paused agent", status: "paused", startedAt: 200 });
+
+    const h = harness([a1, a2]);
+    h.fleet.setLifecycleActions({ pause: pauseFn, resume: resumeFn });
+
+    h.press(DOWN); // main
+    h.press(DOWN); // a1
+    h.press("p");
+    expect(h.notices().some(n => n.includes("worktree-isolated runs cannot pause"))).toBe(true);
+
+    h.press(DOWN); // a2
+    h.press("p");
+    expect(h.notices().some(n => n.includes("Could not resume agent"))).toBe(true);
+  });
 });

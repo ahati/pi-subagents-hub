@@ -720,9 +720,16 @@ export class AgentManager {
     return true;
   }
 
+  private cleanupOutput(record: AgentRecord): void {
+    if (!record.outputCleanup) return;
+    try { record.outputCleanup(); } catch { /* ignore */ }
+    record.outputCleanup = undefined;
+  }
+
   private removeRecord(id: string, record: AgentRecord): void {
     releaseGate(record);
     record.abortController?.abort();
+    this.cleanupOutput(record);
     this.registry.tombstone(record);
     const session = record.session;
     record.session = undefined;
@@ -818,7 +825,11 @@ export class AgentManager {
   async dispose(pi?: ExtensionAPI): Promise<void> {
     clearInterval(this.cleanupInterval);
     this.dequeue(() => true);
-    const sessions = [...this.registry.agents.values()].map(record => record.session);
+    const records = [...this.registry.agents.values()];
+    const sessions = records.map(record => {
+      this.cleanupOutput(record);
+      return record.session;
+    });
     this.registry.agents.clear();
     this.startups.clear();
     this.pool.pausedQueued.clear();

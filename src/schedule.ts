@@ -25,6 +25,9 @@ import { resolveModel } from "./model-resolver.js";
 import type { ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
 
+/** Node.js timers clamp delays above 2^31 - 1 ms to 1 ms, firing immediately. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 /** Event emitted on `pi.events` for cross-extension consumers. */
 export type ScheduleChangeEvent =
   | { type: "added"; job: ScheduledSubagent }
@@ -166,24 +169,58 @@ export class SubagentScheduler {
 
   // ── Scheduling primitives ────────────────────────────────────────────
 
+  private armLongInterval(jobId: string, intervalMs: number, nextAt: number): void {
+    const remaining = Math.max(1, nextAt - Date.now());
+    const t = setTimeout(() => {
+      if (!this.store || this.intervals.get(jobId) !== t) return;
+      if (Date.now() < nextAt) {
+        this.armLongInterval(jobId, intervalMs, nextAt);
+        return;
+      }
+      this.executeJob(jobId);
+      const current = this.store?.get(jobId);
+      if (current?.enabled) {
+        this.armLongInterval(jobId, intervalMs, Date.now() + intervalMs);
+      } else {
+        this.intervals.delete(jobId);
+      }
+    }, Math.min(remaining, MAX_TIMEOUT_MS));
+    this.intervals.set(jobId, t);
+  }
+
+  private armOnceTimeout(jobId: string, target: number): void {
+    const remaining = Math.max(1, target - Date.now());
+    const t = setTimeout(() => {
+      if (!this.store || this.intervals.get(jobId) !== t) return;
+      if (Date.now() < target) {
+        this.armOnceTimeout(jobId, target);
+        return;
+      }
+      this.intervals.delete(jobId);
+      this.executeJob(jobId);
+      // Auto-disable one-shots after they fire (mirrors pi-cron-schedule)
+      const updated = this.persist(jobId, { enabled: false });
+      if (updated) this.emit({ type: "updated", job: updated });
+    }, Math.min(remaining, MAX_TIMEOUT_MS));
+    this.intervals.set(jobId, t);
+  }
+
   private scheduleJob(job: ScheduledSubagent): void {
     const store = this.store;
     if (!store) return;
     try {
       if (job.scheduleType === "interval" && job.intervalMs) {
-        const t = setInterval(() => this.executeJob(job.id), job.intervalMs);
-        this.intervals.set(job.id, t);
+        if (job.intervalMs > MAX_TIMEOUT_MS) {
+          this.armLongInterval(job.id, job.intervalMs, Date.now() + job.intervalMs);
+        } else {
+          const t = setInterval(() => this.executeJob(job.id), job.intervalMs);
+          this.intervals.set(job.id, t);
+        }
       } else if (job.scheduleType === "once") {
         const target = new Date(job.schedule).getTime();
         const delay = target - Date.now();
         if (delay > 0) {
-          const t = setTimeout(() => {
-            this.executeJob(job.id);
-            // Auto-disable one-shots after they fire (mirrors pi-cron-schedule)
-            const updated = this.persist(job.id, { enabled: false });
-            if (updated) this.emit({ type: "updated", job: updated });
-          }, delay);
-          this.intervals.set(job.id, t);
+          this.armOnceTimeout(job.id, target);
         } else {
           // Past timestamp — disable, mark error, never fire
           store.update(job.id, { enabled: false, lastStatus: "error" });

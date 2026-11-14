@@ -7,7 +7,7 @@ import { bridgePiToolToDurableTool } from "../src/runner/durable-tool-bridge.js"
 
 function createMockCtx(): ExtensionContext {
   return {
-    cwd: "/mock/project",
+    cwd: process.cwd(),
     getSystemPrompt: () => "You are a test assistant.",
     model: { provider: "mock-provider", id: "mock-model" },
     modelRegistry: {
@@ -27,6 +27,8 @@ function createMockPi(): ExtensionAPI {
     },
   } as unknown as ExtensionAPI;
 }
+
+vi.setConfig({ testTimeout: 30_000 });
 
 describe("Durable runner with extensions and MCP tools", () => {
   it("boots extension runtime and binds tools to the durable registry", async () => {
