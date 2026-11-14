@@ -811,7 +811,7 @@ export default function (pi: ExtensionAPI) {
           fleet.update();
         },
       }, collisionsState),
-      runWorkflowFlag: (c) => runWorkflowFlag(pi, c, manager, agentActivity, workflowTasks, widget, fleet, isWorkflowsEnabled, flagState),
+      runWorkflowFlag: (c) => runWorkflowFlag(pi, c, manager, agentActivity, workflowTasks, widget, fleet, isWorkflowsEnabled, flagState, trackWorkflowRun),
       registerMentionProvider: (c) => registerMentionProvider(c, mentionHookDeps, mentionState),
       spawnTopLevel,
       ownsManagerRegistry,

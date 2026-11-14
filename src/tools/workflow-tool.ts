@@ -440,6 +440,7 @@ export function runWorkflowFlag(
   fleet: FleetList,
   isWorkflowsEnabled: () => boolean,
   state: { workflowFlagHandled: boolean },
+  trackRun?: (run: Promise<void>) => void,
 ): void {
   if (state.workflowFlagHandled) return;
   const flag = pi.getFlag(WORKFLOW_FILE_FLAG);
@@ -488,7 +489,7 @@ export function runWorkflowFlag(
   fleet.update();
   report(`Running workflow ${meta.name}…`, "info");
 
-  void runWorkflowTask(pi, ctx, manager, agentActivity, task).then(() => {
+  const run = runWorkflowTask(pi, ctx, manager, agentActivity, task).then(() => {
     pi.appendEntry<WorkflowEntryData>(WORKFLOW_ENTRY_TYPE, workflowEntryData(task));
     pi.sendMessage({
       customType: "workflow-result",
@@ -498,4 +499,6 @@ export function runWorkflowFlag(
     widget.update();
     fleet.update();
   });
+  trackRun?.(run);
+  void run;
 }
