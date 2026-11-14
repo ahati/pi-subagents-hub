@@ -13,6 +13,8 @@ import {
 } from "./runtime-types.js";
 
 export interface AgentCallPayload {
+  /** Structural position assigned by the worker, independent of arrival order. */
+  path: string;
   prompt: string;
   label?: string;
   model?: string;

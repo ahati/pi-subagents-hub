@@ -87,12 +87,17 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
   const journalEntries = options.journal?.entries ?? [];
   const recordJournal = options.journal?.append;
+  const journalByPath = new Map<string, WorkflowJournalEntry>();
+  for (const entry of journalEntries) {
+    if (!journalByPath.has(entry.path)) journalByPath.set(entry.path, entry);
+  }
   /**
-   * Whether the replayable prefix is still intact.
+   * Whether replay is still allowed at all.
    *
-   * Once a position misses — different key, a journaled failure, or nothing
-   * recorded there — every later call runs live, however well it matches.
-   * See the header of journal.ts for why this is a prefix and not a lookup.
+   * Matching uses structural position, but invalidation remains run-wide: once
+   * a position misses — different key, a journaled failure, an invalid answer,
+   * or nothing recorded there — every later call runs live. A changed child or
+   * sibling can rewrite a file an unchanged prompt reads.
    */
   // A journal from a run that used `agent({ resume })` is declined whole: see
   // journal.ts on why a replayed agent leaves nothing for a later resume to
@@ -199,11 +204,11 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     },
   });
 
-  /** The journal entry to reuse at `index`, or undefined to run it live. */
-  function replayAt(index: number, key: string): WorkflowJournalEntry | undefined {
+  /** The cached answer at this structural position, until the first miss. */
+  function replayAt(path: string, key: string): WorkflowJournalEntry | undefined {
     if (!prefixIntact) return undefined;
-    const entry = journalEntries[index];
-    if (entry === undefined || entry.index !== index || entry.key !== key || !entry.ok) {
+    const entry = journalByPath.get(path);
+    if (entry === undefined || entry.key !== key || !entry.ok || typeof entry.text !== "string") {
       prefixIntact = false;
       return undefined;
     }
@@ -380,7 +385,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         ...payload,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       };
-      let replayed = replayAt(index, journalKey(keyInput));
+      let replayed = replayAt(payload.path, journalKey(keyInput));
       // A replayed answer still has to satisfy the schema. The key covers a
       // schema that *changed*, but not a journal that was hand-edited, and not
       // the empty text a torn entry leaves behind — either would hand the
@@ -418,6 +423,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         // the command is not re-run, but the verdict is still the audit trail
         // for the answer being handed back.
         recordJournal?.({
+          path: payload.path,
           index,
           key: replayed.key,
           ok: true,
@@ -435,7 +441,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       let toolCalls = 0;
       /** A skip before this attempt started may still follow a paid retry. */
       const settleSkipped = (extra: Partial<WorkflowAgentEntry>) => {
-        recordJournal?.({ index, key, ok: false, ...resumeMark });
+        recordJournal?.({ path: payload.path, index, key, ok: false, ...resumeMark });
         emit([{ ...base, queuedAt, ...extra, ...(tokens > 0 ? { tokens } : {}), ...(toolCalls > 0 ? { toolCalls } : {}), state: "error", skipped: true, error: "Skipped by user." }]);
         // `null`, exactly as a terminal failure gives — a skipped agent is one
         // the script's `.filter(Boolean)` was already written to survive.
@@ -638,6 +644,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             const text = result.text ?? "";
             emit([{ ...common, state: "done", resultPreview: preview(text) }]);
             recordJournal?.({
+              path: payload.path,
               index,
               key,
               ok: true,
@@ -654,6 +661,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           // its output and the directory it ran in, so an entry that reads `ok:
           // false` can be told from a child that simply failed.
           recordJournal?.({
+            path: payload.path,
             index,
             key,
             ok: false,

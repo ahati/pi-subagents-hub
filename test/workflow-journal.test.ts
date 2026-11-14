@@ -83,12 +83,12 @@ describe("journal files", () => {
 
   it("round-trips appended entries in position order", () => {
     const path = join(dir, "run.jsonl");
-    appendJournal(path, { index: 1, key: "k1", ok: true, text: "second" });
-    appendJournal(path, { index: 0, key: "k0", ok: true, text: "first" });
+    appendJournal(path, { path: "#1", index: 1, key: "k1", ok: true, text: "second" });
+    appendJournal(path, { path: "#0", index: 0, key: "k0", ok: true, text: "first" });
 
     expect(readJournal(path)).toEqual([
-      { index: 0, key: "k0", ok: true, text: "first" },
-      { index: 1, key: "k1", ok: true, text: "second" },
+      { path: "#0", index: 0, key: "k0", ok: true, text: "first" },
+      { path: "#1", index: 1, key: "k1", ok: true, text: "second" },
     ]);
   });
 
@@ -100,10 +100,10 @@ describe("journal files", () => {
     // The file is appended to while agents settle, so a killed run routinely
     // leaves a half-written line. Everything before it is still good.
     const path = join(dir, "torn.jsonl");
-    appendJournal(path, { index: 0, key: "k0", ok: true, text: "kept" });
+    appendJournal(path, { path: "#0", index: 0, key: "k0", ok: true, text: "kept" });
     writeFileSync(path, `${readFileSync(path, "utf-8")}{"index":1,"key":"k1"`, "utf-8");
 
-    expect(readJournal(path)).toEqual([{ index: 0, key: "k0", ok: true, text: "kept" }]);
+    expect(readJournal(path)).toEqual([{ path: "#0", index: 0, key: "k0", ok: true, text: "kept" }]);
   });
 
   it("drops lines that are JSON but not entries", () => {
@@ -112,14 +112,32 @@ describe("journal files", () => {
     expect(readJournal(path)).toEqual([]);
   });
 
+  it("does not reuse legacy arrival-only entries", () => {
+    const path = join(dir, "legacy.jsonl");
+    writeFileSync(path, JSON.stringify({ index: 0, key: "k", ok: true, text: "old" }));
+    expect(readJournal(path)).toEqual([]);
+  });
+
+  it.each(["", "#-1", "#0junk", "/0:q:0#0", "\0lost#0"])("rejects invalid structural identity %j", name => {
+    const path = join(dir, "invalid-path.jsonl");
+    writeFileSync(path, JSON.stringify({ path: name, index: 0, key: "k", ok: true, text: "bad" }));
+    expect(readJournal(path)).toEqual([]);
+  });
+
+  it("rejects a successful record whose answer was lost", () => {
+    const path = join(dir, "lost-answer.jsonl");
+    writeFileSync(path, JSON.stringify({ path: "#0", index: 0, key: "k", ok: true }));
+    expect(readJournal(path)).toEqual([]);
+  });
+
   it("reads an entry written before gate outcomes were recorded", () => {
     // Tolerance, not absence: the new fields are additive, so a reader that
     // required them would make every journal already on disk unreadable.
     const path = join(dir, "old.jsonl");
-    writeFileSync(path, '{"index":0,"key":"k0","ok":true,"text":"recorded by an older run"}\n', "utf-8");
+    writeFileSync(path, '{"path":"#0","index":0,"key":"k0","ok":true,"text":"recorded by an older run"}\n', "utf-8");
 
     expect(readJournal(path)).toEqual([
-      { index: 0, key: "k0", ok: true, text: "recorded by an older run" },
+      { path: "#0", index: 0, key: "k0", ok: true, text: "recorded by an older run" },
     ]);
   });
 });
@@ -155,6 +173,7 @@ describe("gate outcomes in the journal", () => {
     expect(stub.calls).toHaveLength(1);
     expect(journal.entries).toEqual([
       {
+        path: "#0",
         index: 0,
         key: journalKey({ prompt: "fix it", gate: "npm test" }),
         ok: true,
@@ -173,6 +192,7 @@ describe("gate outcomes in the journal", () => {
     expect(result.value).toBeNull();
     expect(journal.entries).toEqual([
       {
+        path: "#0",
         index: 0,
         key: journalKey({ prompt: "fix it", gate: "npm test" }),
         ok: false,
@@ -202,6 +222,7 @@ describe("gate outcomes in the journal", () => {
     // trail for the answer being handed back — dropping it would make the
     // resumed run's journal look like an ungated one.
     const first: WorkflowJournalEntry = {
+      path: "#0",
       index: 0,
       key: journalKey({ prompt: "fix it", gate: "npm test" }),
       ok: true,
@@ -233,8 +254,8 @@ describe("replay", () => {
     expect(journal.entries).toEqual([
       // Keyed on what the script asked for, not on what the runtime derived —
       // the label here was derived from the prompt, so it is not part of it.
-      { index: 0, key: journalKey({ prompt: "first" }), ok: true, text: "live:first" },
-      { index: 1, key: journalKey({ prompt: "second" }), ok: true, text: "live:second" },
+      { path: "#0", index: 0, key: journalKey({ prompt: "first" }), ok: true, text: "live:first" },
+      { path: "#1", index: 1, key: journalKey({ prompt: "second" }), ok: true, text: "live:second" },
     ]);
   });
 
@@ -286,7 +307,7 @@ describe("replay", () => {
     const failing = stubHost(() => (attempt++ === 1 ? { ok: false, error: "boom" } : { ok: true, text: "fine" }));
     await run(twoAgents, { host: failing.host, journal: first });
 
-    expect(first.entries[1]).toEqual({ index: 1, key: first.entries[1].key, ok: false });
+    expect(first.entries[1]).toEqual({ path: "#1", index: 1, key: first.entries[1].key, ok: false });
 
     const second = stubHost(() => ({ ok: true, text: "retried" }));
     const result = await run(twoAgents, { host: second.host, journal: { entries: first.entries } });

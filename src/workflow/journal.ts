@@ -1,47 +1,26 @@
 /**
- * journal.ts — the record a workflow run leaves so a later run can skip work.
+ * journal.ts — cached workflow answers, not a checkpoint of their effects.
  *
- * ## What resume actually buys
+ * Calls are identified by structural position, not arrival order: the root,
+ * each parallel thunk, each pipeline item's stage chain, and each nested
+ * workflow body number their own slots. An unchanged pipeline can replay even
+ * when its items finish in a different order.
  *
- * The documented iteration loop is "edit the persisted script and re-run it".
- * Without a journal that re-pays every agent from scratch, which for a 40-agent
- * audit is the entire cost of the run — to change one line of the last stage.
- * With one, the unchanged prefix comes back from disk and only the edit runs.
+ * At the first missing, changed, failed, or invalid answer, the whole run stops
+ * replaying. Structural branches can share files and other effects; a static
+ * prompt does not prove independence from changed sibling or child work.
  *
- * ## Why a *prefix*, and not a lookup table
+ * Replay does not rerun tools or restore files. Use a fresh run after changing
+ * external inputs, agent definitions, models, or the workspace. A run that used
+ * `agent({ resume })` cannot replay: cached text leaves no live child to
+ * continue.
  *
- * Each entry is keyed by both its position in the run and a hash of everything
- * that decides what that agent does. A replay walks positions in order and
- * stops reusing at the first entry that does not match — every call from there
- * on runs live. Reusing later matches out of order would be reusing a result
- * produced under different upstream conditions: the same prompt at position 12
- * of a *different* run is not the same work, because what fed it changed.
+ * A gated call's entry records the gate's outcome alongside the answer — the
+ * command is not re-run on replay, but its verdict remains the audit trail.
  *
- * A failed agent is journaled as a failure and never replayed as one. Resuming
- * a run that died at agent 5 exists to retry agent 5, so the prefix ends there
- * and 5 onwards run live — the alternative would make a failure permanent.
- *
- * ## Runs that use `agent({ resume })`
- *
- * Those are not replayed at all. A replayed agent is text from a file, not a
- * live child, so there is no conversation in this run for a later `resume` to
- * continue — and the id map that would find one belongs to the run that did
- * the spawning. Rather than replay a prefix that strands the first `resume`
- * call, a journal carrying one declines the whole cache and the run pays in
- * full. Coarse on purpose: the alternative is tracking which label each entry
- * ran under and capping the prefix below the earliest one that gets resumed,
- * which is a second key concept for a case that costs one run.
- *
- * ## Ordering under concurrency
- *
- * Positions are assigned as calls arrive, and with `pipeline` that order
- * depends on which agent finished first. A replay usually reproduces it, since
- * cached calls answer in journal order, but it is not guaranteed. That is why
- * the key is checked as well as the position: a run that interleaves
- * differently loses cache hits, it never returns another agent's answer.
- *
- * The file is JSON Lines, appended as each agent settles, so a run that is
- * killed mid-flight still leaves everything it had finished.
+ * The file is JSON Lines, appended as calls settle, so a run that is killed
+ * mid-flight still leaves everything it had finished. Journals written before
+ * structural paths were added are ignored and the work runs live.
  */
 
 import { createHash } from "node:crypto";
@@ -49,11 +28,13 @@ import { appendFileSync, readFileSync } from "node:fs";
 
 /** One settled agent call, as replayed. */
 export interface WorkflowJournalEntry {
-  /** Position in the run — the same counter that names `wf-agent-N`. */
+  /** Structural identity: root #k, parallel /k:p:i, pipeline /k:l:i, child /k:w. */
+  path: string;
+  /** Arrival order, retained for displaying the journal, not for matching calls. */
   index: number;
-  /** Hash of the call's payload; a mismatch ends the replayable prefix. */
+  /** Hash of the call's payload; a mismatch stops further replay. */
   key: string;
-  /** Whether the agent succeeded. A failure ends the prefix on replay. */
+  /** A failure stops further replay and is retried live. */
   ok: boolean;
   /** The agent's answer, when it had one. */
   text?: string;
@@ -196,11 +177,13 @@ function isEntry(value: unknown): value is WorkflowJournalEntry {
   if (typeof value !== "object" || value === null) return false;
   const entry = value as Record<string, unknown>;
   return (
+    typeof entry.path === "string" &&
+    /^(?:\/\d+:(?:p:\d+|l:\d+|w))*#\d+$/.test(entry.path) &&
     Number.isInteger(entry.index) &&
     (entry.index as number) >= 0 &&
     typeof entry.key === "string" &&
     typeof entry.ok === "boolean" &&
-    (entry.text === undefined || typeof entry.text === "string") &&
+    (entry.ok ? typeof entry.text === "string" : entry.text === undefined || typeof entry.text === "string") &&
     (entry.resumed === undefined || entry.resumed === true) &&
     (entry.gate === undefined || isGate(entry.gate))
   );

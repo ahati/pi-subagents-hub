@@ -156,11 +156,10 @@ describe("the limits it quotes", () => {
 
 describe("the resume story it tells", () => {
   it("does not promise an unconditional full cache hit", () => {
-    // Calls are numbered as they arrive, so a differently interleaved
-    // pipeline() on replay misses from that point on (journal.ts, "Ordering
-    // under concurrency"). The prose must not promise 100%.
+    // Structural positions survive a different completion order, but an edited
+    // call still stops replay for the whole run. The prose must not promise 100%.
     expect(description).not.toContain("100% cache hit");
-    expect(description).toContain("cache miss");
+    expect(description).toContain("replay stops for the WHOLE run");
   });
 
   it("warns that a journal using agent({ resume }) declines replay", () => {
@@ -171,11 +170,10 @@ describe("the resume story it tells", () => {
   });
 
   it("says a miss runs live rather than returning a wrong answer", () => {
-    // Anchor to the sentence the fix added, not the pre-existing "runs live"
-    // in the prefix sentence above it — that phrase was already there, so
-    // matching it alone would pass on the pre-fix text.
+    // Anchor to the sentence that makes invalidation run-wide, not the generic
+    // "runs live" phrase.
     expect(description).toContain(
-      "A miss costs tokens, never correctness — a call that does not match its journal entry runs live instead of being handed another agent's answer.",
+      "every subsequent call runs live, including unchanged siblings and parents that may read changed files",
     );
   });
 });
