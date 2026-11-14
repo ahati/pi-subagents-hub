@@ -132,6 +132,7 @@ export async function openAgentHub(ui: HubUICtx, deps: AgentHubDeps, initial?: A
     filterText: "",
     page: runSource ? "W" : "R",
     focusId: known ? target : undefined,
+    focusRunId: !known && run ? run.id : undefined,
     runId: runSource ? (run?.id ?? runTarget) : undefined,
     runItemSel: runSource ? currentPhaseIndex(hubRunGroups(deps, runTarget!)) : undefined,
     detailOpen: known ?? false,
@@ -159,6 +160,8 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   private viewerId: string | undefined;
   private viewerRows = 1;
   focusId: string | undefined;
+  focusRunId: string | undefined;
+  focusRunAgentIndex: number | undefined;
   private readonly popup: boolean;
   page: HubPage = "R";
   runId: string | undefined;
@@ -196,6 +199,8 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     this.filterText = this.resume.filterText;
     this.page = this.resume.page ?? "R";
     this.focusId = this.resume.focusId;
+    this.focusRunId = this.resume.focusRunId;
+    this.focusRunAgentIndex = this.resume.focusRunAgentIndex;
     this.runId = this.resume.runId;
     this.runAgentSel = this.resume.runAgentSel ?? 0;
     this.runItemSel = this.resume.runItemSel ?? 0;
@@ -309,22 +314,24 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
       moveRunItem(this, Math.sign(delta) * steps);
       return;
     }
-    const items = this.entries();
+    const items = this.reconcileSelection();
     if (items.length > 0) {
-      this.selected = Math.min(items.length - 1, Math.max(0, this.selected + Math.sign(delta) * steps));
-      const entry = items[this.selected];
-      this.focusId = entry?.kind === "agent" ? entry.record.id : undefined;
+      this.selectEntry(items, this.selected + Math.sign(delta) * steps);
       this.stopArmed = false;
       this.requestRender();
     }
   }
 
-  dispose(): void {
-    this.disposed = true;
-    clearInterval(this.tick);
+  private disposeViewer(): void {
     this.viewer?.dispose();
     this.viewer = undefined;
     this.viewerId = undefined;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    clearInterval(this.tick);
+    this.disposeViewer();
     if (this.mouseCaptured) {
       disableTerminalMouse(this.tui as unknown as MouseTerminalHost);
       this.mouseCaptured = false;
@@ -370,8 +377,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     const entry = this.entries()[this.selected];
     if (entry?.kind !== "agent") return;
     this.scopeStack.push(entry.record.id);
-    this.selected = 0;
-    this.focusId = entry.record.id;
+    this.selectEntry(this.entries(), 0);
     this.stopArmed = false;
     this.requestRender();
   }
@@ -379,10 +385,9 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   popScope(): void {
     if (this.scopeStack.length === 0) return;
     const popped = this.scopeStack.pop();
-    this.focusId = popped;
     const items = this.entries();
     const idx = items.findIndex(e => e.kind === "agent" && e.record.id === popped);
-    this.selected = idx !== -1 ? idx : 0;
+    this.selectEntry(items, idx !== -1 ? idx : 0);
     this.stopArmed = false;
     this.requestRender();
   }
@@ -467,6 +472,8 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     this.resume.filterText = this.filterText;
     this.resume.page = this.page;
     this.resume.focusId = this.focusId;
+    this.resume.focusRunId = this.focusRunId;
+    this.resume.focusRunAgentIndex = this.focusRunAgentIndex;
     this.resume.runId = this.runId;
     this.resume.runAgentSel = this.runAgentSel;
     this.resume.runItemSel = this.runItemSel;
@@ -488,13 +495,71 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     this.onToggle();
   }
 
+  private selectEntry(items: readonly HubEntry[], index: number): void {
+    if (items.length === 0) {
+      this.selected = 0;
+      this.focusId = undefined;
+      this.focusRunId = undefined;
+      this.disposeViewer();
+      return;
+    }
+    const clamped = Math.min(items.length - 1, Math.max(0, index));
+    this.selected = clamped;
+    const entry = items[clamped];
+    if (entry?.kind === "agent") {
+      this.focusId = entry.record.id;
+      this.focusRunId = undefined;
+    } else if (entry?.kind === "workflow") {
+      this.focusId = undefined;
+      this.focusRunId = entry.workflow.id;
+      this.disposeViewer();
+    } else {
+      this.focusId = undefined;
+      this.focusRunId = undefined;
+      this.disposeViewer();
+    }
+  }
+
+  private reconcileSelection(items: readonly HubEntry[] = this.entries()): readonly HubEntry[] {
+    if (items.length === 0) {
+      this.selected = 0;
+      if (this.focusId === undefined || !this.deps.manager.listAgents().some(a => a.id === this.focusId)) {
+        this.focusId = undefined;
+      }
+      this.focusRunId = undefined;
+      return items;
+    }
+    if (this.focusId !== undefined) {
+      const idx = items.findIndex(e => e.kind === "agent" && e.record.id === this.focusId);
+      if (idx !== -1) {
+        this.selected = idx;
+        this.focusRunId = undefined;
+        return items;
+      }
+      if (this.deps.manager.listAgents().some(a => a.id === this.focusId)) {
+        return items;
+      }
+    } else if (this.focusRunId !== undefined) {
+      const idx = items.findIndex(e => e.kind === "workflow" && e.workflow.id === this.focusRunId);
+      if (idx !== -1) {
+        this.selected = idx;
+        this.focusId = undefined;
+        return items;
+      }
+    }
+    this.selectEntry(items, this.selected);
+    return items;
+  }
+
   clampSelection(): void {
+    this.reconcileSelection();
+  }
+
+  selectRosterIndex(index: number): void {
     const items = this.entries();
-    const max = Math.max(0, items.length - 1);
-    if (this.selected > max) this.selected = max;
-    if (this.selected < 0) this.selected = 0;
-    const entry = items[this.selected];
-    this.focusId = entry?.kind === "agent" ? entry.record.id : undefined;
+    this.selectEntry(items, index);
+    this.stopArmed = false;
+    this.requestRender();
   }
 
   openFilter(): void {
@@ -517,12 +582,10 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   }
 
   moveRosterSelection(direction: 1 | -1): void {
-    const items = this.entries();
+    const items = this.reconcileSelection();
     const next = Math.min(items.length - 1, Math.max(0, this.selected + direction));
     if (next === this.selected) return;
-    this.selected = next;
-    const entry = items[next];
-    this.focusId = entry?.kind === "agent" ? entry.record.id : undefined;
+    this.selectEntry(items, next);
     this.stopArmed = false;
     this.requestRender();
   }
@@ -550,6 +613,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   }
 
   private renderHubPage(width: number, terminalRows: number): string[] {
+    if (this.page === "R") this.reconcileSelection();
     const twoPane = width >= TWO_PANE_MIN_WIDTH;
     if (twoPane) this.detailOpen = false;
     const header: WindowRow[] = [];
@@ -647,6 +711,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   }
 
   private renderActivityWindow(width: number, terminalRows: number): string[] {
+    const items = this.reconcileSelection();
     const rows = paneBodyHeight({
       terminalRows,
       viewportPct: this.viewportPct(),
@@ -663,7 +728,7 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
         rows: [
           { kind: "full", cells: [{ text: buildActivityTitle(width, this.agentRecords(), this.theme) }] },
           { kind: "full", cells: [{ text: "─".repeat(width), color: "dim" }] },
-          ...buildActivityLines(rows, this.entries(), this.deps.agentActivity, this.theme),
+          ...buildActivityLines(rows, items, this.deps.agentActivity, this.theme),
           { kind: "full", cells: [{ text: "─".repeat(width), color: "dim" }] },
           { kind: "full", cells: [{ text: `↑↓ select · Enter open · x stop · ${pauseHint} · 1 agents · f ${this.popup ? "full" : "popup"} · q close` }] },
         ],
@@ -883,8 +948,22 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
   }
 
   clampRunAgentIndex(): number {
-    const max = Math.max(0, this.runAgents().length - 1);
+    const entries = this.runAgents();
+    if (entries.length === 0) {
+      this.runAgentSel = 0;
+      this.focusRunAgentIndex = undefined;
+      return 0;
+    }
+    if (this.focusRunAgentIndex !== undefined) {
+      const idx = entries.findIndex(e => e.index === this.focusRunAgentIndex);
+      if (idx !== -1) {
+        this.runAgentSel = idx;
+        return idx;
+      }
+    }
+    const max = entries.length - 1;
     this.runAgentSel = Math.min(Math.max(0, this.runAgentSel), max);
+    this.focusRunAgentIndex = entries[this.runAgentSel]?.index;
     return this.runAgentSel;
   }
 

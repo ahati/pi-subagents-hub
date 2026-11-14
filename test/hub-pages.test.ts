@@ -1405,4 +1405,49 @@ describe("P10 — runId opens the run's page and the run controls live there", (
     expect(frame.at(-1)).not.toContain("╰");
     expect(frame.at(-1)).not.toContain("╯");
   });
+
+  it("keeps workflow child selection locked by entry.index on WA when an earlier phase adds a child, and restores workflow row on W -> R", () => {
+    const r1 = makeRecord({ id: "r1", alias: "m-1", workflowId: "wf_1" });
+    const r2 = makeRecord({ id: "r2", alias: "m-2", workflowId: "wf_1" });
+    const r3 = makeRecord({ id: "r3", alias: "m-1b", workflowId: "wf_1" });
+    const a1 = makeRecord({ id: "a1", alias: "alpha", startedAt: 100 });
+    const progress: WorkflowAgentEntry[] = [
+      runAgent({ index: 0, label: "m-1", phaseIndex: 0, phaseTitle: "Scan", state: "done", recordId: "r1" }),
+      runAgent({ index: 1, label: "m-2", phaseIndex: 1, phaseTitle: "Fix", state: "running", recordId: "r2" }),
+    ];
+    const wf: FleetWorkflow = {
+      id: "wf_1",
+      name: "migrate-v2",
+      status: "running",
+      doneCount: 1,
+      totalCount: 2,
+      startedAt: 200,
+      tokens: 0,
+    };
+    const h = harness([a1, r1, r2, r3], {
+      workflows: () => [wf],
+      workflowRun: () => ({
+        progress,
+        task: { status: "running", workflowName: "migrate-v2", startTime: 200 },
+        meta: { name: "migrate-v2", description: "d", phases: [{ title: "Scan" }, { title: "Fix" }] },
+      }),
+    });
+
+    h.open();
+    // Move from a1 (0) down to workflow row wf_1 (1), then Enter -> W -> Enter -> WA on m-2.
+    h.press(DOWN);
+    h.press("\r");
+    h.press("\r");
+    expect(h.frame().join("\n")).toMatch(/❯ . m-2/);
+
+    // Earlier phase "Scan" dynamically spawns another child (inserted before Fix's m-2).
+    progress.push(runAgent({ index: 2, label: "m-1b", phaseIndex: 0, phaseTitle: "Scan", state: "running", recordId: "r3" }));
+    expect(h.frame().join("\n")).toMatch(/❯ . m-2/);
+
+    // Spawn a second top-level agent while viewing the workflow, then Esc back WA -> W -> R:
+    // the workflow row stays selected in R.
+    h.press(ESC);
+    h.press(ESC);
+    expect(h.frame().some(l => l.includes("❯") && l.includes("migrate-v2"))).toBe(true);
+  });
 });

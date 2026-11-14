@@ -1337,3 +1337,69 @@ describe("agent hub draggable divider", () => {
     hub.dispose?.();
   });
 });
+
+describe("agent hub selection identity lock", () => {
+  it("keeps left-pane selection locked on the focused agent when earlier rows shift (child spawn / startedAt reorder)", () => {
+    const a1 = makeRecord({ id: "a1", alias: "alpha", description: "first", startedAt: 100, session: sessionOf("msg from alpha") });
+    const a2 = makeRecord({ id: "a2", alias: "beta", description: "second", startedAt: 200, session: sessionOf("msg from beta") });
+    const a3 = makeRecord({ id: "a3", alias: "gamma", description: "third", startedAt: 300, session: sessionOf("msg from gamma") });
+    const agents = [a1, a2, a3];
+
+    const h = harness(agents);
+    h.open();
+    const hub = h.components.at(-1)!;
+    hub.render(120);
+
+    // Move down to beta (index 1).
+    h.press(`${ESC}[B`);
+    let frame = h.frame(120);
+    expect(hub.selected).toBe(1);
+    expect(hub.focusId).toBe("a2");
+    expect(frame.some(l => l.includes("❯") && l.includes("beta"))).toBe(true);
+    expect(frame.some(l => l.includes("msg from beta"))).toBe(true);
+
+    // Alpha spawns a nested child (inserts at index 1, shifting beta to index 2).
+    const child = makeRecord({
+      id: "c1",
+      parentAgentId: "a1",
+      alias: "child-alpha",
+      description: "nested",
+      startedAt: 250,
+      session: sessionOf("msg from child"),
+    });
+    agents.push(child);
+
+    // Re-render (timer tick): left highlight MUST move to index 2 (beta), NOT stay at index 1 (child-alpha).
+    frame = h.frame(120);
+    expect(hub.selected).toBe(2);
+    expect(hub.focusId).toBe("a2");
+    expect(frame.some(l => l.includes("❯") && l.includes("beta"))).toBe(true);
+    expect(frame.some(l => l.includes("❯") && l.includes("child-alpha"))).toBe(false);
+    expect(frame.some(l => l.includes("msg from beta"))).toBe(true);
+
+    // Pressing Down moves from beta (2) to gamma (3).
+    h.press(`${ESC}[B`);
+    frame = h.frame(120);
+    expect(hub.selected).toBe(3);
+    expect(hub.focusId).toBe("a3");
+    expect(frame.some(l => l.includes("❯") && l.includes("gamma"))).toBe(true);
+    expect(frame.some(l => l.includes("msg from gamma"))).toBe(true);
+
+    // Resuming an earlier agent updates its startedAt and moves gamma in the roster;
+    // both left highlight and right transcript stay on gamma.
+    a1.startedAt = 400;
+    frame = h.frame(120);
+    expect(hub.selected).toBe(1);
+    expect(hub.focusId).toBe("a3");
+    expect(frame.some(l => l.includes("❯") && l.includes("gamma"))).toBe(true);
+    expect(frame.some(l => l.includes("msg from gamma"))).toBe(true);
+
+    // Switching to activity view and pressing Home updates both selected and focusId.
+    h.press("\t");
+    h.press(`${ESC}[H`);
+    expect(hub.selected).toBe(0);
+    expect(hub.focusId).toBe("a2");
+
+    hub.dispose?.();
+  });
+});
