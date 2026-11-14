@@ -96,7 +96,7 @@ export function buildAgentToolParams(schedulingEnabled: boolean, worktreeIsolati
     resume: Type.Optional(
       Type.String({
         description:
-          'The agent name to resume from (e.g. "bold-curie"), or its ID. Continues from previous context. Resumes detached like any other spawn; pass run_in_background: false to block and get the result inline. The resumed run gets a fresh max_turns budget. An agent can only be resumed once its current run has finished — use steer_subagent to reach one mid-run.',
+          'The agent name to resume from (e.g. "bold-curie"), or its ID. The name is the generated or caller-given one reported on the `Agent:` line (or `Agent Name:` for a background spawn) of any result. Continues from previous context. Resumes detached like any other spawn; pass run_in_background: false to block and get the result inline. The resumed run gets a fresh max_turns budget. An agent can only be resumed once its current run has finished — use steer_subagent to reach one mid-run.',
       }),
     ),
     isolated: Type.Optional(

@@ -12,10 +12,12 @@
  *   1. The record is NOT cleaned up. Foreground completion mutates the record
  *      in place (agent-manager.ts startAgent's .then) — nothing deletes it. So
  *      a lookup with the REAL id succeeds.
- *   2. The model never HAD the real id. Foreground returns the result text
- *      only; the id travels in `details`, which is renderer metadata and never
- *      reaches the API (only `content` is serialized). The background path is
- *      the one that puts `Agent ID: ...` in the text.
+ *   2. Before #160 the model never HAD the resumable handle: foreground
+ *      returned the result text only, while the internal id travelled in
+ *      `details` — renderer metadata that never reaches the API (only
+ *      `content` is serialized). The fork resumes by its generated or
+ *      caller-given name, so #160 reports that name in the foreground and
+ *      nested inline results; the raw record id stays internal.
  *
  * Together: whatever id the reporter's model passed, it wasn't one we issued,
  * and "not found" was the correct answer. Test 3 pins the eviction rule that
@@ -75,8 +77,8 @@ const textOf = (r: any): string => r.content[0].text;
  * which is what produces the reporter's "(wrapped up at the turn limit —
  * output may be partial)" note.
  *
- * Returns the tool result plus the id read out of `details` — the only place
- * a foreground id exists, which is the point of test 2.
+ * Returns the tool result plus the internal id read out of `details`. The text
+ * carries the resumable *name* since #160; test 2 pins that.
  */
 async function runForegroundSteeredAgent(tools: Map<string, any>) {
   vi.mocked(runAgent).mockResolvedValue({
@@ -154,18 +156,22 @@ describe("issue #174: foreground agent that hits max_turns", () => {
     await lifecycle.get("session_shutdown")?.({}, ctx());
   });
 
-  it("never hands the model an agent id — the id lives only in renderer details", async () => {
+  it("hands the model the resumable name, not the internal record id", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
     const { res, id } = await runForegroundSteeredAgent(tools);
 
-    // `content` is the only thing serialized to the API. If the id isn't here,
-    // the model cannot have obtained it — any id it passes is invented.
-    expect(textOf(res)).not.toContain(id);
-    expect(textOf(res)).not.toMatch(/Agent ID:/);
+    // `content` is the only thing serialized to the API. The fork resumes by
+    // the generated/given name, so that is what the result must carry.
+    const name = /Agent: (\S+)/.exec(textOf(res))?.[1];
+    expect(name, "foreground result should name the agent").toBeTruthy();
+    expect(textOf(res)).not.toContain(`Agent ID: ${id}`);
 
-    // An invented id is correctly rejected — this is the reporter's error,
-    // reproduced WITHOUT any record having been cleaned up.
+    // The internal id from `details` still resolves the result for the UI.
+    const read = await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
+    expect(textOf(read)).toContain("THE-RESULT-PAYLOAD");
+
+    // An invented id is still rejected.
     const bogus = await tools.get("get_subagent_result").execute(
       "tc-bogus",
       { agent_id: "3f1320a7-74ec-422" },

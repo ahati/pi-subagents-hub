@@ -399,11 +399,18 @@ export function createAgentTool(deps: AgentToolDeps) {
         // callback, so persist its outcome here: get_subagent_result must find
         // this run's result, not the earlier run's, once the live record is gone.
         pi.appendEntry<AgentRecordEntryData>(AGENT_RECORD_ENTRY_TYPE, agentRecordEntryData(record));
+        // A foreground resume settles inline; name the agent so the caller can
+        // resume it again by the handle the fork assigns (a generated or given
+        // name), never the internal record id.
+        const resumedName = record.alias ?? existing.alias;
         if (record.status === "error") {
-          return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBaseFor(record), record, resumeState));
+          return textResult(
+            `Agent failed: ${record.error}${resumedName ? `\nAgent: ${resumedName}` : ""}${partialOutputSuffix(record)}`,
+            buildDetails(detailBaseFor(record), record, resumeState),
+          );
         }
         return textResult(
-          record.result?.trim() || "No output.",
+          (resumedName ? `Agent: ${resumedName}\n\n` : "") + (record.result?.trim() || "No output."),
           buildDetails(detailBaseFor(record), record, resumeState),
         );
       }
@@ -599,8 +606,12 @@ export function createAgentTool(deps: AgentToolDeps) {
       const tokenText = formatLifetimeTokens(record);
       const details = buildDetails(detailBaseFor(record), record, fgState, { tokens: tokenText });
 
+      const agentName = record.alias || params.name;
       if (record.status === "error") {
-        return textResult(`${fallbackNote}Agent failed: ${record.error}${partialOutputSuffix(record)}`, details);
+        return textResult(
+          `${fallbackNote}Agent failed: ${record.error}${agentName ? `\nAgent: ${agentName}` : ""}${partialOutputSuffix(record)}`,
+          details,
+        );
       }
 
       const durationMs = (record.completedAt ?? Date.now()) - record.startedAt;
@@ -610,7 +621,6 @@ export function createAgentTool(deps: AgentToolDeps) {
         const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
         if (costText) statsParts.push(costText);
       }
-      const agentName = record.alias || params.name;
       const agentHeader = agentName ? `Agent: ${agentName}\n` : "";
       return textResult(
         `${fallbackNote}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status)}.\n` +

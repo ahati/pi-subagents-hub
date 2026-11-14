@@ -158,8 +158,11 @@ function resolveAnswerer(manager: NestedAgentManager, child: AgentRecord): { kin
 type ResultPosition = "inline" | "fetched";
 
 function formatRecord(record: AgentRecord, position: ResultPosition): string {
+  // Matches the top-level format so one `Agent ID: (\S+)` reads either surface.
+  const idLine = position === "inline" ? `Agent ID: ${record.id}` : "";
   if (record.status === "error") {
-    return `Agent failed: ${record.error ?? "unknown error"}${partialOutputSuffix(record)}`;
+    const failure = [`Agent failed: ${record.error ?? "unknown error"}`, idLine].filter(Boolean).join("\n");
+    return `${failure}${partialOutputSuffix(record)}`;
   }
   if (record.status === "queued" || record.status === "running") {
     return `Agent ${record.id} is ${record.status}.`;
@@ -171,7 +174,8 @@ function formatRecord(record: AgentRecord, position: ResultPosition): string {
   const note = position === "inline"
     ? getForegroundOutcomeNote(record.status)
     : getStatusNote(record.status);
-  const noted = note ? `Nested agent${note}.\n\n${text}` : text;
+  const header = [note ? `Nested agent${note}.` : "", idLine].filter(Boolean).join("\n");
+  const noted = header ? `${header}\n\n${text}` : text;
   // Unanswered questions ride the result as a footer — the safety net when no
   // answerer reached the child mid-run. Formatted at read time, never merged
   // into record.result (same reason structuredJson is kept separate).
@@ -224,7 +228,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
           description: "Defaults to false for nested spawns — the call blocks and returns the child's result inline. Set true to run in the background; you will receive a completion notification when it finishes (or can check with get_subagent_result).",
         }),
       ),
-      resume: Type.Optional(Type.String({ description: "Resume a nested agent owned by this parent." })),
+      resume: Type.Optional(Type.String({ description: "Resume a nested agent owned by this parent, by the id reported on the `Agent ID:` line of its result." })),
       isolated: Type.Optional(Type.Boolean()),
       inherit_context: Type.Optional(Type.Boolean()),
       ...isolationParam(isWorktreeIsolationEnabled()),
