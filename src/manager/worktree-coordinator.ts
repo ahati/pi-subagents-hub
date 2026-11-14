@@ -61,7 +61,13 @@ export class WorktreeCoordinator {
     const description = options.description ?? record.description ?? "";
     const wtResult = await cleanupWorktree(pi, baseCwd, record.worktree, description);
     record.worktreeResult = wtResult;
-    if (wtResult.hasChanges && wtResult.branch) {
+    if (wtResult.error) {
+      // A preservation failure must not look like a completed run: the worktree
+      // may be the only copy of the agent's work.
+      const message = `Worktree cleanup failed: ${wtResult.error}\nAgent worktree remains at \`${wtResult.path}\` for recovery.`;
+      record.status = "error";
+      record.error = record.error ? `${record.error}\n${message}` : message;
+    } else if (wtResult.hasChanges && wtResult.branch) {
       const repoNote = options.customCwd !== undefined ? ` in \`${baseCwd}\`` : "";
       record.result =
         (record.result ?? "") +

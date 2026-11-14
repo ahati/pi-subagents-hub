@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -362,20 +362,82 @@ describe("worktree", () => {
       try { execFileSync("git", ["branch", "-D", result.branch!], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
     });
 
-    it("falls back to pruning when `git worktree remove` fails", async () => {
-      // Removal failing is not fatal — the registration is pruned instead, and
-      // the caller still hears that there were no changes.
+    it("reports the recovery path when clean worktree removal fails", async () => {
       const wt = (await createWorktree(pi, repoDir, "remove-fails"))!;
       const failing = failingPi(
         args => args[0] === "worktree" && args[1] === "remove",
         { code: 1, killed: false },
       );
 
-      const result = await cleanupWorktree(failing, repoDir, wt, "removal fails");
+      try {
+        const result = await cleanupWorktree(failing, repoDir, wt, "removal fails");
 
-      expect(result.hasChanges).toBe(false);
-      expect(vi.mocked(failing.exec).mock.calls.some(([, args]) => args[0] === "worktree" && args[1] === "prune")).toBe(true);
-      try { execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+        expect(result).toEqual({ hasChanges: true, path: wt.path, error: "boom" });
+        expect(existsSync(wt.path)).toBe(true);
+        expect(vi.mocked(failing.exec).mock.calls.some(([, args]) => args[0] === "worktree" && args[1] === "prune")).toBe(true);
+      } finally {
+        try { execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      }
+    });
+
+    it("keeps branch metadata when removal fails after preserving changes", async () => {
+      const wt = (await createWorktree(pi, repoDir, "dirty-remove-fails"))!;
+      writeFileSync(join(wt.path, "work.txt"), "agent output");
+      const failing = failingPi(
+        args => args[0] === "worktree" && args[1] === "remove",
+        { code: 1, killed: false },
+      );
+
+      try {
+        const result = await cleanupWorktree(failing, repoDir, wt, "removal fails");
+
+        expect(result).toEqual({
+          hasChanges: true,
+          branch: wt.branch,
+          path: wt.path,
+          error: "boom",
+        });
+        expect(existsSync(wt.path)).toBe(true);
+        expect(execFileSync("git", ["branch", "--list", wt.branch], { cwd: repoDir, encoding: "utf8" })).toContain(wt.branch);
+      } finally {
+        try { execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+        try { execFileSync("git", ["branch", "-D", wt.branch], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      }
+    });
+
+    it("bypasses configured commit signing for preservation commits", async () => {
+      const isWindows = platform() === "win32";
+      const signerMarker = join(repoDir, "signer-invoked");
+      const signerPath = join(repoDir, isWindows ? "signer.cmd" : "signer.sh");
+      writeFileSync(
+        signerPath,
+        isWindows
+          ? `@echo invoked>"${signerMarker}"\r\nexit /b 1\r\n`
+          : `#!/bin/sh\nprintf invoked > "${signerMarker}"\nexit 1\n`,
+        { mode: 0o755 },
+      );
+      for (const [key, value] of [
+        ["commit.gpgsign", "true"],
+        ["gpg.format", "ssh"],
+        ["gpg.ssh.program", signerPath],
+        ["user.signingkey", "test-signing-key"],
+      ]) {
+        execFileSync("git", ["config", key, value], { cwd: repoDir, stdio: "pipe" });
+      }
+
+      const wt = (await createWorktree(pi, repoDir, "signed-1"))!;
+      writeFileSync(join(wt.path, "signed-file.txt"), "agent wrote this");
+
+      try {
+        const result = await cleanupWorktree(pi, repoDir, wt, "signing must not block");
+
+        expect(result.hasChanges).toBe(true);
+        expect(result.branch).toBe("pi-agent-signed-1");
+        expect(existsSync(signerMarker)).toBe(false);
+      } finally {
+        try { execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+        try { execFileSync("git", ["branch", "-D", wt.branch], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      }
     });
   });
 
@@ -434,7 +496,7 @@ describe("cleanupWorktree — failure path", () => {
 
       const result = await cleanupWorktree(pi, repoDir, wt, "corrupted agent");
 
-      expect(result).toEqual({ hasChanges: true, path: wt.path });
+      expect(result).toEqual({ hasChanges: true, path: wt.path, error: expect.any(String) });
       expect(readFileSync(join(wt.path, "work.txt"), "utf-8")).toBe("agent output");
       // The corruption defeats cleanup on purpose, so the directory is still
       // there — the reason this test disposes of it itself. Created under its
@@ -457,7 +519,7 @@ describe("cleanupWorktree — failure path", () => {
       // Check the actual artifact first: the old catch forcibly removed it.
       expect(existsSync(wt.path)).toBe(true);
       expect(readFileSync(join(wt.path, "work.txt"), "utf-8")).toBe("agent output");
-      expect(result).toEqual({ hasChanges: true, path: wt.path });
+      expect(result).toEqual({ hasChanges: true, path: wt.path, error: expect.any(String) });
       expect(vi.mocked(failing.exec).mock.calls.some(([, args]) =>
         args[0] === "worktree" && args[1] === "remove")).toBe(false);
       expect(execFileSync("git", ["worktree", "list", "--porcelain"], {

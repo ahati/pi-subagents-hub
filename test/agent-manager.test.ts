@@ -1092,6 +1092,33 @@ describe("AgentManager — isolation: worktree fails loud, no silent fallback", 
     expect(runAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("reports a preserved worktree when cleanup fails after a completed run", async () => {
+    const { createWorktree, cleanupWorktree } = await import("../src/worktree.js");
+    const wt = { path: "/wt/recover", branch: "pi-agent-recover", baseSha: "abc", workPath: "/wt/recover" };
+    vi.mocked(createWorktree).mockResolvedValueOnce(wt as never);
+    vi.mocked(cleanupWorktree).mockResolvedValueOnce({
+      hasChanges: true,
+      path: wt.path,
+      error: "commit failed",
+    });
+    resolvedRun();
+
+    manager = new AgentManager();
+    const id = manager.spawn(mockPi, mockCtx, "X", "go", {
+      description: "go", isBackground: true, isolation: "worktree",
+    });
+    await manager.awaitStartup(id);
+    await manager.getRecord(id)!.promise;
+
+    const record = manager.getRecord(id)!;
+    expect(record.status).toBe("error");
+    expect(record.error).toBe(
+      "Worktree cleanup failed: commit failed\nAgent worktree remains at `/wt/recover` for recovery.",
+    );
+    expect(record.result).toBe("done");
+    expect(record.worktreeResult).toMatchObject({ path: wt.path, error: "commit failed" });
+  });
+
   it("keeps the concurrency slot accounting straight while the worktree is being created", async () => {
     // The slot is claimed before the awaited copy, so drainQueue can't read a
     // stale runningBackground and start every queued agent at once — and it is
