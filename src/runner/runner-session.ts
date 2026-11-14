@@ -60,6 +60,7 @@ import {
 } from "../nested-tools.js";
 import { buildAgentPrompt, inheritableParentPrompt, type PromptExtras } from "../prompts.js";
 import { continueSessionBare } from "../session-continue.js";
+import { loadRequiredExtensionPaths } from "../settings.js";
 import { preloadSkills } from "../skill-loader.js";
 import {
   createStructuredCapture,
@@ -230,6 +231,7 @@ interface RunnerResourceContext {
   narrowing: Map<string, Set<string>>;
   mcpToolPatterns: string[] | undefined;
   noExtensions: boolean;
+  requiredExtensionPaths: Set<string>;
 }
 
 /**
@@ -265,10 +267,17 @@ async function createRunnerResourceLoader(
   const excludeNames = new Set((excludeExtensions ?? []).map((n: string) => n.toLowerCase()));
   const hasExcludes = excludeNames.size > 0;
   const loadAll = extensions === true || extensionsSpec?.wildcard === true;
-  const additionalExtensionPaths = extensionsSpec?.paths.length ? extensionsSpec.paths : undefined;
+  // Globally required policy extensions are handler-only: loaded into every
+  // session, never removable by agent frontmatter, and their tools are never
+  // scoped in (see installExtensionToolScope's handlerOnlyPaths).
+  const requiredExtensionPaths = new Set(loadRequiredExtensionPaths(agentDir).map((entry) => resolve(entry)));
+  const additionalExtensionPaths = [...new Set([
+    ...(extensionsSpec?.paths ?? []),
+    ...requiredExtensionPaths,
+  ])];
   let discoveredNames: Set<string> | undefined;
   const extensionsOverride: ((base: LoadExtensionsResult) => LoadExtensionsResult) | undefined =
-    noExtensions || (loadAll && !hasExcludes)
+    requiredExtensionPaths.size === 0 && (noExtensions || (loadAll && !hasExcludes))
       ? undefined
       : (base) => {
           discoveredNames = new Set(base.extensions.flatMap((e) => extensionCanonicalNames(e.path)));
@@ -276,6 +285,8 @@ async function createRunnerResourceLoader(
             ...base,
             extensions: base.extensions.filter((e) => {
               if (e.path === `<inline:${SCOPE_GATE_NAME}>`) return true;
+              if (requiredExtensionPaths.has(resolve(e.path))) return true;
+              if (noExtensions) return false;
               const canons = extensionCanonicalNames(e.path);
               if (canons.some((n) => excludeNames.has(n))) return false;
               return loadAll || canons.some((n) => keepNames.has(n));
@@ -296,8 +307,8 @@ async function createRunnerResourceLoader(
     cwd: configCwd,
     agentDir,
     settingsManager,
-    noExtensions,
-    additionalExtensionPaths,
+    noExtensions: noExtensions && requiredExtensionPaths.size === 0,
+    additionalExtensionPaths: additionalExtensionPaths.length ? additionalExtensionPaths : undefined,
     extensionsOverride,
     extensionFactories: [
       ...PI_BUILTIN_EXTENSIONS,
@@ -316,6 +327,12 @@ async function createRunnerResourceLoader(
     appendSystemPromptOverride: () => [],
   });
   await runInChildSessionContext(() => loader.reload());
+
+  const loadedExtensionPaths = new Set(loader.getExtensions().extensions.map((e) => resolve(e.path)));
+  const missingRequiredExtension = [...requiredExtensionPaths].find((entry) => !loadedExtensionPaths.has(entry));
+  if (missingRequiredExtension) {
+    throw new Error(`Required subagent extension failed to load: ${missingRequiredExtension}`);
+  }
 
   if (agentConfig?.builtinToolNames?.length) {
     const knownBuiltins = new Set(BUILTIN_TOOL_NAMES);
@@ -385,6 +402,7 @@ async function createRunnerResourceLoader(
     narrowing,
     mcpToolPatterns,
     noExtensions,
+    requiredExtensionPaths,
   };
 }
 
@@ -575,6 +593,7 @@ interface CreateSessionParams {
   narrowing: Map<string, Set<string>>;
   mcpToolPatterns: string[] | undefined;
   readmitToolNames: Set<string>;
+  requiredExtensionPaths: Set<string>;
   options: RunOptions;
 }
 
@@ -603,7 +622,7 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
     ctx, type, agentConfig, effectiveCwd, agentDir, loader, sessionSettingsManager,
     model, thinkingLevel, sessionTools, sessionExcludeTools, customTools,
     noExtensions, nestedCallGate, toolNames, disallowedSet, extNames,
-    narrowing, mcpToolPatterns, readmitToolNames, options,
+    narrowing, mcpToolPatterns, readmitToolNames, requiredExtensionPaths, options,
   } = params;
 
   const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd);
@@ -667,14 +686,19 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
     options.agentId ? `${baseSessionName}#${options.agentId.slice(0, 8)}` : baseSessionName,
   );
 
+  let requiredBindingError: Error | undefined;
   await session.bindExtensions({
     onError: (err: any) => {
       options.onToolActivity?.({
         type: "warning",
         toolName: `extension-error:${err.extensionPath}`,
       });
+      if (requiredExtensionPaths.has(resolve(err.extensionPath))) {
+        requiredBindingError = new Error(`Required subagent extension failed to bind: ${err.extensionPath}`);
+      }
     },
   });
+  if (requiredBindingError) throw requiredBindingError;
 
   if ((session as any)._extensionRunner?.emitBeforeAgentStart) {
     await (session as any)._extensionRunner.emitBeforeAgentStart(
@@ -693,6 +717,7 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
       narrowing,
       mcpToolPatterns: isolated ? undefined : mcpToolPatterns,
       readmitToolNames,
+      handlerOnlyPaths: requiredExtensionPaths,
       nestedCallGate,
     });
   }
@@ -1725,6 +1750,7 @@ export async function runAgent(
       narrowing: resourceContext.narrowing,
       mcpToolPatterns: resourceContext.mcpToolPatterns,
       readmitToolNames: toolLoadout.readmitToolNames,
+      requiredExtensionPaths: resourceContext.requiredExtensionPaths,
       options,
     });
   toolLoadout.model = effectiveModel;

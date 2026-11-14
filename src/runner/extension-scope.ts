@@ -213,15 +213,18 @@ export function installExtensionToolScope(
     mcpToolPatterns: string[] | undefined;
     readmitToolNames: Set<string>;
     nestedCallGate: NestedCallGate;
+    /** Globally required handler extensions; their tools never enter the scope. */
+    handlerOnlyPaths: Set<string>;
   },
 ): void {
-  const { loader, toolNames, disallowedSet, extNames, narrowing, mcpToolPatterns, readmitToolNames, nestedCallGate } =
+  const { loader, toolNames, disallowedSet, extNames, narrowing, mcpToolPatterns, readmitToolNames, nestedCallGate, handlerOnlyPaths } =
     ctx;
 
   const inScope = (): Set<string> => {
     const keep = new Set(toolNames.filter((t) => !disallowedSet?.has(t)));
     const optInActive = extNames.size > 0;
     for (const extension of loader.getExtensions().extensions) {
+      if (handlerOnlyPaths.has(extension.path)) continue;
       const canons = extensionCanonicalNames(extension.path);
       if (optInActive && !canons.some((c) => extNames.has(c))) continue;
       const narrowed = canons.map((c) => narrowing.get(c)).find(Boolean);

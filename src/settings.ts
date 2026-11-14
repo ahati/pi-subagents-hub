@@ -6,7 +6,8 @@
 // `.pi` directory in every repo the user happens to be in (#391).
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import type { CacheRetention } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
@@ -363,6 +364,13 @@ export interface SubagentsSettings {
 export interface SubagentsFileSettings extends SubagentsSettings {
   /** Per-child model-call prompt cache retention. `inherit` (or absent) leaves Pi's request options untouched, including `PI_CACHE_RETENTION`. */
   cacheRetention?: CacheRetention | "inherit";
+  /**
+   * Global-only policy extensions: handler-only extensions loaded into every
+   * subagent session, isolated ones included. Removed from the settings that
+   * `loadSettings` returns, and refused from a project file, so a project can
+   * never weaken machine-level policy.
+   */
+  requiredExtensions?: string[];
 }
 
 export type ToolDescriptionMode = "full" | "compact" | "custom";
@@ -440,6 +448,11 @@ function sanitize(raw: unknown): SubagentsFileSettings {
   if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
   const out: SubagentsFileSettings = {};
+  if (Array.isArray(r.requiredExtensions)
+    && r.requiredExtensions.every((entry) => typeof entry === "string" && entry.trim())
+  ) {
+    out.requiredExtensions = [...new Set(r.requiredExtensions.map((entry) => (entry as string).trim()))];
+  }
   if (r.cacheRetention === "inherit" || r.cacheRetention === "none" || r.cacheRetention === "short" || r.cacheRetention === "long") {
     out.cacheRetention = r.cacheRetention;
   }
@@ -571,8 +584,8 @@ function sanitize(raw: unknown): SubagentsFileSettings {
   return out;
 }
 
-function globalPath(): string {
-  return join(getAgentDir(), "subagents.json");
+function globalPath(agentDir: string = getAgentDir()): string {
+  return join(agentDir, "subagents.json");
 }
 
 function projectPath(cwd: string): string {
@@ -597,7 +610,46 @@ function readSettingsFile(path: string): SubagentsFileSettings {
 
 /** Load merged settings: global provides defaults, project overrides. */
 export function loadSettings(cwd: string = process.cwd()): SubagentsFileSettings {
-  return { ...readSettingsFile(globalPath()), ...readSettingsFile(projectPath(cwd)) };
+  const global = { ...readSettingsFile(globalPath()) };
+  const project = { ...readSettingsFile(projectPath(cwd)) };
+  // Global-only policy surface: never merged into ordinary settings, so neither
+  // the menu nor a project file can influence it.
+  delete global.requiredExtensions;
+  delete project.requiredExtensions;
+  return { ...global, ...project };
+}
+
+/**
+ * Read the global-only required extension list. Any malformed global file or
+ * invalid entry throws: policy enforcement that cannot be proven must stop the
+ * spawn rather than silently run without it.
+ */
+function readRequiredExtensions(path: string): string[] {
+  if (!existsSync(path)) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cannot enforce required subagent extensions from ${path}: ${reason}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Cannot enforce required subagent extensions: ${path} must contain an object`);
+  }
+  const value = (parsed as Record<string, unknown>).requiredExtensions;
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    throw new Error(`Cannot enforce required subagent extensions: ${path}.requiredExtensions must contain non-empty strings`);
+  }
+  return [...new Set(value as string[])];
+}
+
+/** Resolve globally required extension paths relative to the Pi agent directory. */
+export function loadRequiredExtensionPaths(agentDir: string = getAgentDir()): string[] {
+  return readRequiredExtensions(globalPath(agentDir)).map((entry) => {
+    if (entry === "~" || entry.startsWith("~/")) return join(homedir(), entry.slice(2));
+    return isAbsolute(entry) ? entry : join(agentDir, entry);
+  });
 }
 
 /**
@@ -616,13 +668,17 @@ export function saveSettings(s: SubagentsSettings, cwd: string = process.cwd()):
     // The menu snapshot has no row for file-only settings; carry them over so
     // changing an ordinary setting cannot silently drop them. A malformed file
     // has nothing to carry (and must not turn the write into a failure).
-    let cacheRetention: SubagentsFileSettings["cacheRetention"];
+    let fileOnly: Pick<SubagentsFileSettings, "cacheRetention" | "requiredExtensions"> = {};
     try {
-      cacheRetention = existsSync(path)
-        ? sanitize(JSON.parse(readFileSync(path, "utf-8"))).cacheRetention
-        : undefined;
+      if (existsSync(path)) {
+        const existing = sanitize(JSON.parse(readFileSync(path, "utf-8")));
+        fileOnly = {
+          ...(existing.cacheRetention !== undefined ? { cacheRetention: existing.cacheRetention } : {}),
+          ...(existing.requiredExtensions !== undefined ? { requiredExtensions: existing.requiredExtensions } : {}),
+        };
+      }
     } catch { /* malformed file: write the snapshot as-is */ }
-    const payload = cacheRetention === undefined ? s : { ...s, cacheRetention };
+    const payload = { ...s, ...fileOnly };
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(payload, null, 2), "utf-8");
     return true;

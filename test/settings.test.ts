@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyAndEmitLoaded,
   applySettings,
+  loadRequiredExtensionPaths,
   loadSettings,
   persistToastFor,
   type SettingsAppliers,
@@ -105,6 +106,32 @@ describe("settings persistence", () => {
     saveSettings({ maxConcurrent: 4 }, projectDir);
 
     expect(loadSettings(projectDir)).toEqual({ cacheRetention: "long", maxConcurrent: 4 });
+  });
+
+  it("never exposes requiredExtensions through loadSettings", () => {
+    writeGlobal({ requiredExtensions: ["/opt/policy.ts"], maxConcurrent: 8 });
+    writeProject({ requiredExtensions: ["/tmp/local.ts"], graceTurns: 3 });
+
+    expect(loadSettings(projectDir)).toEqual({ maxConcurrent: 8, graceTurns: 3 });
+  });
+
+  it("reads required extensions from the global file only and resolves paths", () => {
+    writeGlobal({ requiredExtensions: ["/abs/policy.ts", "rel/policy.ts", "~/home-policy.ts"] });
+    writeProject({ requiredExtensions: ["/tmp/local.ts"] });
+
+    const paths = loadRequiredExtensionPaths(globalDir);
+    expect(paths).toContain("/abs/policy.ts");
+    expect(paths).toContain(join(globalDir, "rel/policy.ts"));
+    expect(paths.some(p => p.endsWith("home-policy.ts"))).toBe(true);
+    expect(paths).not.toContain("/tmp/local.ts");
+  });
+
+  it("fails closed on a malformed global file or invalid requiredExtensions", () => {
+    writeFileSync(globalFile(), "{");
+    expect(() => loadRequiredExtensionPaths(globalDir)).toThrow("Cannot enforce required subagent extensions");
+
+    writeGlobal({ requiredExtensions: ["ok", 3] });
+    expect(() => loadRequiredExtensionPaths(globalDir)).toThrow("must contain non-empty strings");
   });
 
   it("round-trips values: saveSettings then loadSettings", () => {
