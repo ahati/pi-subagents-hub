@@ -88,6 +88,17 @@ let nextCallId = 1;
 const pendingCalls = new Map();
 
 /**
+ * Last failure reason per label, for \`agentError(label)\`.
+ *
+ * Per run, and shared by nested \`workflow()\` calls because they share this
+ * worker. A success does not clear an earlier failure: the script checks its
+ * current result for null first, then asks why. Concurrent calls with the same
+ * label resolve last-write-wins, which is why an explicit label is the
+ * documented way to use this.
+ */
+const agentErrors = new Map();
+
+/**
  * Output tokens this run has spent, as last reported by the host.
  *
  * A mirror, not a tally: every response carries the host's current total, so
@@ -115,6 +126,11 @@ port.on("message", function (message) {
   if (!waiter) return;
   pendingCalls.delete(message.callId);
   if (message.ok) {
+    // Recorded before resolving, so the awaiting script can read the reason as
+    // soon as \`agent()\` returns null without changing that return value.
+    if (message.value === null && typeof message.agentLabel === "string" && typeof message.error === "string") {
+      agentErrors.set(message.agentLabel, message.error);
+    }
     waiter.resolve(message.value);
     return;
   }
@@ -361,6 +377,18 @@ const UNSUPPORTED_AGENT_OPTIONS = {};
  * \`phase("Scan")\` must not resolve to the parent's "Scan".
  */
 let nextPhaseIndex = 0;
+
+/**
+ * The bounded reason a call under \`label\` failed in this run, or undefined.
+ *
+ * Read-only and deliberately separate from \`agent()\`'s return value: Claude
+ * Code scripts filter \`null\`, and changing what a failed call resolves to would
+ * break them. The label is the effective display label — the one the progress
+ * tree shows — so an explicit \`opts.label\` is the predictable way to read this.
+ */
+function agentError(label) {
+  return agentErrors.get(requireText(label, "agentError(label)"));
+}
 
 /**
  * One script's view of the world.
@@ -765,6 +793,7 @@ async function main() {
     phase: rootScope.phase,
     log: rootScope.log,
     workflow: rootScope.workflow,
+    agentError: agentError,
     budget: makeBudget(),
     console: rootScope.console,
   };

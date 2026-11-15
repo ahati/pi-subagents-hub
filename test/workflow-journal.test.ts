@@ -196,6 +196,7 @@ describe("gate outcomes in the journal", () => {
         index: 0,
         key: journalKey({ prompt: "fix it", gate: "npm test" }),
         ok: false,
+        error: "FAIL src/auth.test.ts\n1 failing",
         gate: { ok: false, output: "FAIL src/auth.test.ts\n1 failing", cwd: "/repo" },
       },
     ]);
@@ -307,7 +308,7 @@ describe("replay", () => {
     const failing = stubHost(() => (attempt++ === 1 ? { ok: false, error: "boom" } : { ok: true, text: "fine" }));
     await run(twoAgents, { host: failing.host, journal: first });
 
-    expect(first.entries[1]).toEqual({ path: "#1", index: 1, key: first.entries[1].key, ok: false });
+    expect(first.entries[1]).toEqual({ path: "#1", index: 1, key: first.entries[1].key, ok: false, error: "boom" });
 
     const second = stubHost(() => ({ ok: true, text: "retried" }));
     const result = await run(twoAgents, { host: second.host, journal: { entries: first.entries } });

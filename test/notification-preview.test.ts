@@ -15,6 +15,7 @@ vi.mock("../src/agent-runner.js", async () => {
   return { ...actual, runAgent: vi.fn() };
 });
 
+import { buildNotificationDetails } from "../src/entry/renderers.js";
 import subagentsExtension from "../src/index.js";
 import { type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
 
@@ -65,5 +66,29 @@ describe("the notification card's collapsed result preview", () => {
     const out = render('{\n  "a": 1,\n  "b": 2\n}', true);
     expect(out).toContain('"a": 1,');
     expect(out).toContain('"b": 2');
+  });
+});
+
+describe("notification details carry the whole report", () => {
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  const record = (over: Record<string, unknown>) => ({
+    id: "a", description: "a", status: "completed", toolUses: 0,
+    startedAt: 0, completedAt: 1, lifetimeUsage: usage, ...over,
+  }) as any;
+
+  it("falls back to the error body when a failed agent wrote no report", () => {
+    const details = buildNotificationDetails(record({ status: "error", error: "429 rate_limit_error" }));
+    expect(details.resultPreview).toBe("429 rate_limit_error");
+  });
+
+  it("keeps a long report whole so expanding can show it", () => {
+    const report = `${"line\n".repeat(500)}last line`;
+    const details = buildNotificationDetails(record({ result: report }));
+    expect(details.resultPreview).toBe(report);
+  });
+
+  it("still prefers a real report over the error on a partial failure", () => {
+    const details = buildNotificationDetails(record({ status: "error", error: "wrap-up", result: "partial work" }));
+    expect(details.resultPreview).toBe("partial work");
   });
 });

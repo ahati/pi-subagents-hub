@@ -13,7 +13,7 @@ import {
   getLastAssistantText,
   observeRun,
 } from "./runner-helpers.js";
-import { resolveEffectiveMaxTurns } from "./runner-settings.js";
+import { normalizeMaxTurns, resolveEffectiveMaxTurns } from "./runner-settings.js";
 import type { ResumeAgentOptions, RunResult } from "./runner-types.js";
 
 /**
@@ -39,7 +39,12 @@ export async function resumeAgent(
   const startLen = session.messages.length;
   const collector = collectResponseText(session);
   const cleanupAbort = forwardAbortSignal(session, options.signal);
-  const run = observeRun(session, { ...options, maxTurns: resolveEffectiveMaxTurns(options.type, options.maxTurns) });
+  // Already resolved: `undefined` is unlimited. Looking it up again would
+  // consult the process-global registry and ignore the caller's.
+  const maxTurns = options.maxTurnsResolved
+    ? normalizeMaxTurns(options.maxTurns)
+    : resolveEffectiveMaxTurns(options.type, options.maxTurns);
+  const run = observeRun(session, { ...options, maxTurns });
 
   let failure: string | undefined;
   let finalText = "";

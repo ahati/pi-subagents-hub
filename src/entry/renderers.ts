@@ -151,8 +151,16 @@ export function buildDetails(
   };
 }
 
-/** Build notification details for the custom message renderer. */
-export function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, activity?: AgentActivity): NotificationDetails {
+/**
+ * Build notification details for the custom message renderer.
+ *
+ * The result body is carried whole, not capped: the details are the UI's copy,
+ * and the collapsed row previews it while expanding shows all of it. The
+ * model-facing `<task-notification>` text keeps its own cap — that one is
+ * context, this one is a reader who asked for the whole thing. A failed agent
+ * that produced no report hands over its error body instead of "No output."
+ */
+export function buildNotificationDetails(record: AgentRecord, activity?: AgentActivity): NotificationDetails {
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
 
   return {
@@ -170,11 +178,7 @@ export function buildNotificationDetails(record: AgentRecord, resultMaxLen: numb
     durationMs: record.completedAt ? record.completedAt - record.startedAt : 0,
     outputFile: record.outputFile,
     error: record.error,
-    resultPreview: record.result
-      ? record.result.length > resultMaxLen
-        ? record.result.slice(0, resultMaxLen) + "…"
-        : record.result
-      : "No output.",
+    resultPreview: record.result ?? record.error ?? "No output.",
   };
 }
 

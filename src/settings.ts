@@ -12,6 +12,7 @@ import type { CacheRetention } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
 import type { AgentMentionMode, JoinMode, UIStyle, ViewerStyle } from "./types.js";
+import { MAX_WORKTREE_TIMEOUT_SECONDS, MIN_WORKTREE_TIMEOUT_SECONDS } from "./worktree.js";
 
 export type { UIStyle };
 
@@ -208,6 +209,17 @@ export interface SubagentsSettings {
    */
   worktreeIsolation?: boolean;
   /**
+   * Seconds `git worktree add` may take before the spawn fails. Default `30`,
+   * the value this was hardcoded to; accepted range 30–3600.
+   *
+   * Exists for large repositories, where a checkout can take minutes. Without
+   * it the failure was indistinguishable from "not a git repo" and the copy
+   * was silently dropped instead of the caller being told what to change.
+   * Applied when the worktree is created, so a change takes effect on the next
+   * isolated spawn.
+   */
+  worktreeTimeoutSeconds?: number;
+  /**
    * Master switch for scripted workflows. Defaults to `true`.
    *
    * Off is not a soft hide: the `SubagentWorkflow` tool is never registered, so
@@ -371,6 +383,22 @@ export interface SubagentsFileSettings extends SubagentsSettings {
   /** Per-child model-call prompt cache retention. `inherit` (or absent) leaves Pi's request options untouched, including `PI_CACHE_RETENTION`. */
   cacheRetention?: CacheRetention | "inherit";
   /**
+   * How the model reaches this extension's tools: `direct` (default) or
+   * `deferred`.
+   *
+   * `direct` declares `Agent` and `SubagentWorkflow` — schemas and all — on
+   * every turn. `deferred` leaves them out of the default tool set; pi's
+   * `tool_search` extension finds and activates one only on the turn it is
+   * relevant. Measured savings are workload-dependent: a session that does
+   * delegate pays a `tool_search` round trip, which can cost more than the
+   * declaration it avoided.
+   *
+   * File-only because it is read once at tool registration: changing it takes
+   * effect on the next pi session. Unlike a project-agent declaration, this is
+   * not executable content, so a project file may set it.
+   */
+  toolExposure?: "direct" | "deferred";
+  /**
    * Global-only policy extensions: handler-only extensions loaded into every
    * subagent session, isolated ones included. Removed from the settings that
    * `loadSettings` returns, and refused from a project file, so a project can
@@ -401,6 +429,7 @@ export interface SettingsAppliers {
   setRememberAgents: (b: boolean) => void;
   setOutputTranscript: (b: boolean) => void;
   setWorktreeIsolation: (b: boolean) => void;
+  setWorktreeTimeoutSeconds: (seconds: number) => void;
   setWorkflowsEnabled: (b: boolean) => void;
   setMaxSubagentDepth: (n: number) => void;
   setFallbackSubagent: (v: string | undefined) => void;
@@ -462,6 +491,9 @@ function sanitize(raw: unknown): SubagentsFileSettings {
   }
   if (r.cacheRetention === "inherit" || r.cacheRetention === "none" || r.cacheRetention === "short" || r.cacheRetention === "long") {
     out.cacheRetention = r.cacheRetention;
+  }
+  if (r.toolExposure === "direct" || r.toolExposure === "deferred") {
+    out.toolExposure = r.toolExposure;
   }
   if (
     Number.isInteger(r.maxConcurrent) &&
@@ -554,6 +586,13 @@ function sanitize(raw: unknown): SubagentsFileSettings {
   }
   if (typeof r.worktreeIsolation === "boolean") {
     out.worktreeIsolation = r.worktreeIsolation;
+  }
+  if (
+    Number.isInteger(r.worktreeTimeoutSeconds) &&
+    (r.worktreeTimeoutSeconds as number) >= MIN_WORKTREE_TIMEOUT_SECONDS &&
+    (r.worktreeTimeoutSeconds as number) <= MAX_WORKTREE_TIMEOUT_SECONDS
+  ) {
+    out.worktreeTimeoutSeconds = r.worktreeTimeoutSeconds as number;
   }
   if (typeof r.reportUsage === "boolean") {
     out.reportUsage = r.reportUsage;
@@ -682,13 +721,14 @@ export function saveSettings(s: SubagentsSettings, cwd: string = process.cwd()):
     // The menu snapshot has no row for file-only settings; carry them over so
     // changing an ordinary setting cannot silently drop them. A malformed file
     // has nothing to carry (and must not turn the write into a failure).
-    let fileOnly: Pick<SubagentsFileSettings, "cacheRetention" | "requiredExtensions"> = {};
+    let fileOnly: Pick<SubagentsFileSettings, "cacheRetention" | "requiredExtensions" | "toolExposure"> = {};
     try {
       if (existsSync(path)) {
         const existing = sanitize(JSON.parse(readFileSync(path, "utf-8")));
         fileOnly = {
           ...(existing.cacheRetention !== undefined ? { cacheRetention: existing.cacheRetention } : {}),
           ...(existing.requiredExtensions !== undefined ? { requiredExtensions: existing.requiredExtensions } : {}),
+          ...(existing.toolExposure !== undefined ? { toolExposure: existing.toolExposure } : {}),
         };
       }
     } catch { /* malformed file: write the snapshot as-is */ }
@@ -725,6 +765,9 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.rememberAgents === "boolean") appliers.setRememberAgents(s.rememberAgents);
   if (typeof s.outputTranscript === "boolean") appliers.setOutputTranscript(s.outputTranscript);
   if (typeof s.worktreeIsolation === "boolean") appliers.setWorktreeIsolation(s.worktreeIsolation);
+  if (typeof s.worktreeTimeoutSeconds === "number") {
+    appliers.setWorktreeTimeoutSeconds(s.worktreeTimeoutSeconds);
+  }
   if (typeof s.reportUsage === "boolean") appliers.setReportUsage(s.reportUsage);
   if (typeof s.showCost === "boolean") appliers.setShowCost(s.showCost);
   if (typeof s.showModel === "boolean") appliers.setShowModel(s.showModel);

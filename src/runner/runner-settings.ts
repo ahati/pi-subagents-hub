@@ -30,6 +30,24 @@ export function resolveEffectiveMaxTurns(type: string, explicit?: number): numbe
 }
 
 /**
+ * Turn budget for one resumed run, resolved by a caller that owns the agent
+ * registry the agent came from: the agent file's `max_turns`, else the resume
+ * call's, else the limit the agent was spawned with, else the project default.
+ *
+ * A nested resume passes its branch's registry entry here. Letting
+ * {@link resumeAgent} look the type up again would read the process-global
+ * registry, so a same-named agent in the main config could impose a limit the
+ * branch never set — or replace an explicit unlimited with its own ceiling.
+ */
+export function resolveResumeTurnLimit(
+  configMaxTurns: number | undefined,
+  explicit: number | undefined,
+  spawnedMaxTurns: number | undefined,
+): number | undefined {
+  return normalizeMaxTurns(configMaxTurns ?? explicit ?? spawnedMaxTurns ?? defaultMaxTurns);
+}
+
+/**
  * Project default for `persist_session`, from the `rememberAgents` setting.
  */
 let rememberAgents = true;

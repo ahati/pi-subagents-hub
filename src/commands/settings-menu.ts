@@ -62,8 +62,12 @@ import type {
 import type { AgentWidget } from "../ui/agent-widget.js";
 import type { FleetList } from "../ui/fleet-list.js";
 import {
+  getWorktreeTimeoutSeconds,
   isWorktreeIsolationEnabled,
+  MAX_WORKTREE_TIMEOUT_SECONDS,
+  MIN_WORKTREE_TIMEOUT_SECONDS,
   setWorktreeIsolationEnabled,
+  setWorktreeTimeoutSeconds,
 } from "../worktree.js";
 
 export interface SettingsMenuDeps {
@@ -101,6 +105,8 @@ export interface SettingsMenuDeps {
   setDisableDefaultAgents: (b: boolean) => void;
   getToolDescriptionMode: () => ToolDescriptionMode;
   setToolDescriptionMode: (m: ToolDescriptionMode) => void;
+  /** The active session's project root: where this menu reads and writes settings. */
+  getConfigCwd: () => string;
 }
 
 function snapshotSettings(deps: SettingsMenuDeps) {
@@ -128,6 +134,7 @@ function snapshotSettings(deps: SettingsMenuDeps) {
     rememberAgents: getRememberAgents(),
     outputTranscript: getOutputTranscriptDefault(),
     worktreeIsolation: isWorktreeIsolationEnabled(),
+    worktreeTimeoutSeconds: getWorktreeTimeoutSeconds(),
     workflowsEnabled: deps.isWorkflowsPinned() ? deps.isWorkflowsEnabled() : undefined,
     maxSubagentDepth: getMaxSubagentDepth(),
     fallbackSubagent: getFallbackSubagent(),
@@ -171,12 +178,14 @@ function notifyApplied(
     snapshotSettings(deps),
     successMsg,
     (event, payload) => deps.pi.events.emit(event, payload),
+    deps.getConfigCwd(),
   );
   ctx.ui.notify(message, level);
 }
 
 const NUMERIC_IDS = new Set([
   "maxConcurrent", "maxConcurrentForeground", "maxConcurrentNested", "defaultMaxTurns", "graceTurns", "maxSubagentDepth",
+  "worktreeTimeoutSeconds",
 ]);
 
 /**
@@ -383,6 +392,14 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
         values: ["on", "off"],
       },
       {
+        id: "worktreeTimeoutSeconds",
+        label: "Worktree timeout",
+        description:
+          `Seconds git may take to create an isolated worktree (${MIN_WORKTREE_TIMEOUT_SECONDS}-${MAX_WORKTREE_TIMEOUT_SECONDS}, default 30; raise it for a large repo, Enter to type)`,
+        currentValue: String(getWorktreeTimeoutSeconds()),
+        values: [String(getWorktreeTimeoutSeconds())],
+      },
+      {
         id: "reportUsage",
         label: "Report usage to session",
         description:
@@ -583,6 +600,12 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
         `Worktree isolation ${enabled ? "enabled" : "disabled"}. Tool parameter updates on next pi session.`,
         deps,
       );
+    } else if (id === "worktreeTimeoutSeconds") {
+      const n = parseInt(value, 10);
+      if (Number.isInteger(n) && n >= MIN_WORKTREE_TIMEOUT_SECONDS && n <= MAX_WORKTREE_TIMEOUT_SECONDS) {
+        setWorktreeTimeoutSeconds(n);
+        notifyApplied(ctx, `Worktree timeout set to ${getWorktreeTimeoutSeconds()}s`, deps);
+      }
     } else if (id === "packageAgents" || id === "packageWorkflows") {
       const enabled = value === "on";
       const isAgents = id === "packageAgents";
@@ -691,7 +714,9 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
             ? String(getDefaultMaxTurns() ?? 0)
             : result === "maxSubagentDepth"
               ? String(getMaxSubagentDepth())
-              : String(getGraceTurns());
+              : result === "worktreeTimeoutSeconds"
+                ? String(getWorktreeTimeoutSeconds())
+                : String(getGraceTurns());
 
     const label = result === "maxConcurrent"
       ? "Max background concurrency (1+)"
@@ -703,7 +728,9 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
             ? "Default max turns (0 = unlimited)"
             : result === "maxSubagentDepth"
               ? "Nested depth (0/1 = nesting off)"
-              : "Grace turns (1+)";
+              : result === "worktreeTimeoutSeconds"
+                ? `Worktree timeout (${MIN_WORKTREE_TIMEOUT_SECONDS}-${MAX_WORKTREE_TIMEOUT_SECONDS} seconds)`
+                : "Grace turns (1+)";
 
     let input: string | undefined = await ctx.ui.input(label, current);
     while (input != null) {

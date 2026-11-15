@@ -7,9 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupWorktree,
   createWorktree,
+  getWorktreeTimeoutSeconds,
   isWorktreeIsolationEnabled,
   pruneWorktrees,
   setWorktreeIsolationEnabled,
+  setWorktreeTimeoutSeconds,
 } from "../src/worktree.js";
 
 /**
@@ -74,6 +76,7 @@ describe("worktree", () => {
   });
 
   afterEach(async () => {
+    setWorktreeTimeoutSeconds(30);
     // Clean up any lingering worktrees first, then remove repo
     try { await pruneWorktrees(pi, repoDir); } catch { /* ignore */ }
     rmSync(repoDir, { recursive: true, force: true });
@@ -137,6 +140,95 @@ describe("worktree", () => {
         "timed-out",
       );
       expect(wt).toBeUndefined();
+    });
+
+    it("passes the configured checkout timeout to git", async () => {
+      setWorktreeTimeoutSeconds(120);
+      const exec = vi.fn(mockPi().exec);
+      const tracking = { exec } as unknown as ExtensionAPI;
+      const wt = await createWorktree(tracking, repoDir, "timeout-config");
+      try {
+        expect(wt).toBeDefined();
+        expect(exec).toHaveBeenCalledWith(
+          "git",
+          ["worktree", "add", "--detach", expect.any(String), "HEAD"],
+          expect.objectContaining({ timeout: 120_000 }),
+        );
+      } finally {
+        if (wt) {
+          try { execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+        }
+      }
+    });
+
+    it("removes a partially created worktree when the checkout times out", async () => {
+      const baseDir = mkdtempSync(join(tmpdir(), "pi-wt-partial-"));
+      const real = mockPi();
+      const calls: string[][] = [];
+      let partial: string | undefined;
+      const tracking = {
+        exec: vi.fn(async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+          calls.push(args);
+          if (args[0] === "worktree" && args[1] === "add") {
+            partial = args[3];
+            // An unregistered partial directory: killed before the admin entry
+            // was written, so `worktree remove` reports "is not a working tree".
+            mkdirSync(partial, { recursive: true });
+            writeFileSync(join(partial, "half-checkout.txt"), "partial");
+            return { stdout: "", stderr: "", code: 0, killed: true };
+          }
+          return real.exec(command, args, options);
+        }),
+      } as unknown as ExtensionAPI;
+      try {
+        setWorktreeTimeoutSeconds(30);
+        expect(await createWorktree(tracking, repoDir, "partial-timeout", baseDir)).toBeUndefined();
+        expect(partial).toBeDefined();
+        expect(existsSync(partial!)).toBe(false);
+        expect(calls.some(args =>
+          args[0] === "worktree" && args[1] === "remove" && args.filter(a => a === "--force").length === 2,
+        )).toBe(true);
+        expect(calls.some(args => args[0] === "worktree" && args[1] === "prune")).toBe(true);
+      } finally {
+        rmSync(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    it("removes a registered half-created worktree with no repo-wide prune", async () => {
+      const baseDir = mkdtempSync(join(tmpdir(), "pi-wt-registered-"));
+      const real = mockPi();
+      const calls: string[][] = [];
+      let partial: string | undefined;
+      const tracking = {
+        exec: vi.fn(async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+          calls.push(args);
+          if (args[0] === "worktree" && args[1] === "add") {
+            // A killed add that DID register: the admin entry and the copied
+            // directory both exist, so the scoped remove must handle both.
+            partial = args[3];
+            execFileSync("git", ["worktree", "add", "--detach", partial, "HEAD"], { cwd: repoDir, stdio: "pipe" });
+            return { stdout: "", stderr: "", code: 0, killed: true };
+          }
+          return real.exec(command, args, options);
+        }),
+      } as unknown as ExtensionAPI;
+      try {
+        expect(await createWorktree(tracking, repoDir, "partial-registered", baseDir)).toBeUndefined();
+        expect(partial).toBeDefined();
+        expect(existsSync(partial!)).toBe(false);
+        const list = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repoDir, stdio: "pipe" }).toString();
+        expect(list).not.toContain(partial!);
+        expect(calls.some(args => args[0] === "worktree" && args[1] === "prune")).toBe(false);
+      } finally {
+        rmSync(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    it("clamps a programmatic timeout to the documented range", () => {
+      setWorktreeTimeoutSeconds(1);
+      expect(getWorktreeTimeoutSeconds()).toBe(30);
+      setWorktreeTimeoutSeconds(99_999);
+      expect(getWorktreeTimeoutSeconds()).toBe(3600);
     });
 
     it("workPath equals path when created from the repo root", async () => {

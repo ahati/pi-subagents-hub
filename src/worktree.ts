@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -52,6 +53,31 @@ export function isWorktreeIsolationEnabled(): boolean {
   return worktreeIsolationEnabled;
 }
 
+export const MIN_WORKTREE_TIMEOUT_SECONDS = 30;
+export const MAX_WORKTREE_TIMEOUT_SECONDS = 3600;
+const DEFAULT_WORKTREE_TIMEOUT_SECONDS = 30;
+
+/**
+ * How long `git worktree add` may take, in seconds. Default 30 — the value this
+ * was hardcoded to before it became a setting.
+ *
+ * A large repository can take minutes to check out, and the failure used to be
+ * indistinguishable from "not a git repo": the spawn dies with a message that
+ * sends the reader to initialize git. Raising this is the whole fix for that
+ * case; it is a project setting rather than a per-call option because the
+ * repository size is the thing that decides it.
+ */
+let worktreeTimeoutSeconds = DEFAULT_WORKTREE_TIMEOUT_SECONDS;
+
+export function getWorktreeTimeoutSeconds(): number {
+  return worktreeTimeoutSeconds;
+}
+
+export function setWorktreeTimeoutSeconds(seconds: number): void {
+  if (!Number.isInteger(seconds)) return;
+  worktreeTimeoutSeconds = Math.min(MAX_WORKTREE_TIMEOUT_SECONDS, Math.max(MIN_WORKTREE_TIMEOUT_SECONDS, seconds));
+}
+
 export interface WorktreeCleanupResult {
   /** Whether changes were found, or preservation failed and the worktree was kept for recovery. */
   hasChanges: boolean;
@@ -74,7 +100,12 @@ export interface WorktreeCleanupResult {
  */
 async function git(pi: ExtensionAPI, cwd: string, args: string[], timeout: number): Promise<string> {
   const result = await pi.exec("git", args, { cwd, timeout });
-  if (result.killed || result.code !== 0) {
+  // A killed command reports exit code 0, so it has to be checked first — the
+  // old single check turned every timeout into "exit 0", which read as success.
+  if (result.killed) {
+    throw new Error(`git ${args[0]} timed out after ${Math.round(timeout / 1000)}s`);
+  }
+  if (result.code !== 0) {
     throw new Error(result.stderr.trim() || `git ${args.join(" ")} failed (exit ${result.code})`);
   }
   return result.stdout.trim();
@@ -117,12 +148,52 @@ export async function createWorktree(
 
   try {
     // Create detached worktree at HEAD
-    await git(pi, cwd, ["worktree", "add", "--detach", worktreePath, "HEAD"], 30000);
+    await git(pi, cwd, ["worktree", "add", "--detach", worktreePath, "HEAD"], worktreeTimeoutSeconds * 1000);
     return { path: worktreePath, branch, baseSha, workPath: subdir ? join(worktreePath, subdir) : worktreePath };
   } catch {
+    // A killed `worktree add` can leave a half-populated directory and a
+    // registration behind. Drop both before reporting failure; otherwise a
+    // timed-out attempt leaks a copy of the repository into the temp dir and
+    // makes the next `git worktree add` for that path fail too.
+    await discardWorktree(pi, cwd, worktreePath);
     // If worktree creation fails, return undefined (agent runs in normal cwd)
     return undefined;
   }
+}
+
+/**
+ * Best-effort removal of a worktree that failed to finish creating.
+ *
+ * `git worktree remove --force --force` is the exact-worktree operation: it
+ * deletes the working directory and its `.git/worktrees/<name>` entry in one
+ * scoped call, so no repository-wide prune is needed on the normal path. The
+ * second `--force` also clears a lock a killed `worktree add` can leave, and
+ * the command succeeds when the directory is already gone but the
+ * registration remains — which is why there is no `existsSync` guard.
+ *
+ * A failed add can also leave a directory that was never registered, removed
+ * before the admin entry was written. There `worktree remove` reports "is not a
+ * working tree"; delete that exact path, then prune the orphaned metadata.
+ * Prune only drops registrations whose directory is missing, so another
+ * agent's live worktree is untouched.
+ *
+ * Never throws: this runs on a path that is already reporting a failure, and
+ * the caller's job is to fail the spawn cleanly, not to surface a second
+ * cleanup error it can do nothing about.
+ */
+async function discardWorktree(pi: ExtensionAPI, cwd: string, worktreePath: string): Promise<void> {
+  try {
+    await git(pi, cwd, ["worktree", "remove", "--force", "--force", worktreePath], 10000);
+    return;
+  } catch { /* not registered, or the admin entry itself is corrupt */ }
+  // Asynchronous: a large partial checkout must not block the event loop that
+  // every other running workflow shares.
+  try {
+    await rm(worktreePath, { recursive: true, force: true });
+  } catch { /* ignore */ }
+  try {
+    await git(pi, cwd, ["worktree", "prune"], 5000);
+  } catch { /* ignore */ }
 }
 
 /**

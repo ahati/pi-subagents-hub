@@ -108,6 +108,17 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({ cacheRetention: "long", maxConcurrent: 4 });
   });
 
+  it("accepts toolExposure values, drops unknown ones, and preserves it on save", () => {
+    writeProject({ toolExposure: "deferred", maxConcurrent: 8 });
+    expect(loadSettings(projectDir)).toEqual({ toolExposure: "deferred", maxConcurrent: 8 });
+
+    saveSettings({ maxConcurrent: 4 }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ toolExposure: "deferred", maxConcurrent: 4 });
+
+    writeProject({ toolExposure: "lazy" });
+    expect(loadSettings(projectDir)).toEqual({});
+  });
+
   it("never exposes requiredExtensions through loadSettings", () => {
     writeGlobal({ requiredExtensions: ["/opt/policy.ts"], maxConcurrent: 8 });
     writeProject({ requiredExtensions: ["/tmp/local.ts"], graceTurns: 3 });
@@ -298,6 +309,15 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({ worktreeIsolation: true });
     writeGlobal({ worktreeIsolation: "off" } as any);
     expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
+  });
+
+  it("round-trips worktreeTimeoutSeconds within 30-3600; drops out-of-range values", () => {
+    saveSettings({ worktreeTimeoutSeconds: 120 }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ worktreeTimeoutSeconds: 120 });
+    for (const value of [1, 29, 3601, 3.5, "120"] as unknown[]) {
+      writeGlobal({ worktreeTimeoutSeconds: value });
+      expect(loadSettings(projectDir)).toEqual({});
+    }
   });
 
   it("round-trips reportUsage and showCost; drops non-boolean", () => {
@@ -688,6 +708,7 @@ describe("settings persistence", () => {
         setViewerMarkdown: vi.fn(),
         setOutputTranscript: vi.fn(),
         setWorktreeIsolation: vi.fn(),
+        setWorktreeTimeoutSeconds: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
         setFallbackSubagent: vi.fn(),
         setReportUsage: vi.fn(),
@@ -712,6 +733,15 @@ describe("settings persistence", () => {
       vi.mocked(appliers.setMaxConcurrentForeground).mockClear();
       applySettings({}, appliers);
       expect(appliers.setMaxConcurrentForeground).not.toHaveBeenCalled();
+    });
+
+    it("applies worktreeTimeoutSeconds", () => {
+      applySettings({ worktreeTimeoutSeconds: 120 }, appliers);
+      expect(appliers.setWorktreeTimeoutSeconds).toHaveBeenCalledWith(120);
+
+      vi.mocked(appliers.setWorktreeTimeoutSeconds).mockClear();
+      applySettings({}, appliers);
+      expect(appliers.setWorktreeTimeoutSeconds).not.toHaveBeenCalled();
     });
 
     it("applies maxConcurrentNested, including an explicit 0", () => {
@@ -982,6 +1012,7 @@ describe("settings persistence", () => {
         setViewerMarkdown: vi.fn(),
         setOutputTranscript: vi.fn(),
         setWorktreeIsolation: vi.fn(),
+        setWorktreeTimeoutSeconds: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
         setFallbackSubagent: vi.fn(),
         setReportUsage: vi.fn(),

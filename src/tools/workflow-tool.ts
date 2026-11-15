@@ -120,7 +120,9 @@ export function notifyWorkflowFinished(
       totalTokens: task.totalTokens,
       durationMs: elapsedMs(task, Date.now()),
       error: task.error,
-      resultPreview: result.length > 500 ? `${result.slice(0, 500)}…` : result,
+      // The details are what the expanded card reads, so they keep the whole
+      // result; `formatWorkflowNotification` keeps its own cap for the model.
+      resultPreview: result,
     },
   };
   outbox.add({ ids: [task.id], build: () => message });

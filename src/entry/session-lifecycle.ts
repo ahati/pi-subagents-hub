@@ -41,6 +41,8 @@ export interface AgentLifecycleState {
   registryEntry: any;
   getCurrentCtx: () => ExtensionContext | undefined;
   setCurrentCtx: (ctx: ExtensionContext | undefined) => void;
+  /** Re-read `subagents.json` for the session that just became active. */
+  applySessionSettings: (ctx: ExtensionContext) => void;
 }
 
 /** Lifecycle operations and agent state management actions. */
@@ -166,6 +168,7 @@ export function registerSessionLifecycle(
     registerTurnGroup,
     getCurrentCtx,
     setCurrentCtx,
+    applySessionSettings,
   } = deps;
 
   let rpcHandle: RpcHandle | undefined;
@@ -185,6 +188,9 @@ export function registerSessionLifecycle(
 
   pi.on("session_start", async (_event, ctx) => {
     setCurrentCtx(ctx);
+    // The active session's project owns the settings and agent files, however
+    // pi was launched — a resumed session keeps a cwd of its own.
+    applySessionSettings(ctx);
     park.resetOnSessionStart();
     setProjectTrusted(ctx.isProjectTrusted?.() === true);
     invalidatePackageCache();

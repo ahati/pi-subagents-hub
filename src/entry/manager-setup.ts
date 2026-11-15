@@ -91,7 +91,7 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
       const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : '';
       const message = {
         content: formatTaskNotification(record, 500, isShowCostEnabled()) + footer,
-        details: buildNotificationDetails(record, 500, activity),
+        details: buildNotificationDetails(record, activity),
       };
       outbox.add({ ids: [record.id], build: () => message });
     } catch { /* ignore stale completion side-effects */ }
@@ -110,7 +110,7 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
 
       const members = records.filter(r => !r.resultConsumed).flatMap(r => {
         try {
-          return [{ id: r.id, text: formatTaskNotification(r, 300, isShowCostEnabled()), details: buildNotificationDetails(r, 300, activities.get(r.id)) }];
+          return [{ id: r.id, text: formatTaskNotification(r, 300, isShowCostEnabled()), details: buildNotificationDetails(r, activities.get(r.id)) }];
         } catch { return []; }
       });
       if (members.length > 0) {

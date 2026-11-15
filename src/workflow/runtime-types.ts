@@ -31,6 +31,17 @@ export const WORKFLOW_PARK_STOP_ERROR = "Workflow stopped at its park boundary."
 export const PREVIEW_LENGTH = 200;
 
 /**
+ * How much of a failure reason the journal keeps and `agentError()` hands to
+ * the script.
+ *
+ * Provider and gate text is unbounded and untrusted, and every character is
+ * paid for twice: once in the journal line, once in the model's context when
+ * a retry loop reads it back. Enough for an HTTP status, a model message or
+ * the tail of a failing test run; not a transcript.
+ */
+export const WORKFLOW_FAILURE_REASON_LIMIT = 500;
+
+/**
  * How much of a gate's output the journal keeps.
  *
  * A gate is routinely a whole test suite, so the raw capture is unbounded and

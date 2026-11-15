@@ -14,6 +14,7 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  ToolExposure,
 } from "@earendil-works/pi-coding-agent";
 import type { ScrollViewScrollbar } from "@earendil-works/pi-tui";
 import { isTopLevelAgent } from "./agent-manager.js";
@@ -98,6 +99,7 @@ import { SubagentScheduler } from "./schedule.js";
 import {
   applyAndEmitLoaded,
   loadSettings,
+  type SettingsAppliers,
   type ToolDescriptionMode,
 } from "./settings.js";
 import { createAgentTool } from "./tools/agent-tool.js";
@@ -141,6 +143,7 @@ import {
 import {
   isWorktreeIsolationEnabled,
   setWorktreeIsolationEnabled,
+  setWorktreeTimeoutSeconds,
 } from "./worktree.js";
 
 export {
@@ -157,6 +160,14 @@ export {
 export default function (pi: ExtensionAPI) {
   if (inChildSessionContext()) return;
 
+  /**
+   * The active session's context. Config discovery and settings follow its
+   * `cwd`, not `process.cwd`: a session resumed from another directory keeps
+   * its own project, and pi does not chdir to match it.
+   */
+  let currentCtx: ExtensionContext | undefined;
+  const configCwd = (): string => currentCtx?.cwd ?? process.cwd();
+
   registerSubagentRenderers(pi, () => showCost);
 
   pi.registerFlag(WORKFLOW_FILE_FLAG, {
@@ -168,13 +179,19 @@ export default function (pi: ExtensionAPI) {
 
   const bootSettings = loadSettings(process.cwd());
   let strictAgentFiles = bootSettings.strictAgentFiles === true;
+  /**
+   * Read once, like `schedulingEnabled`'s schema gating: a tool spec is fixed
+   * once pi has it, so changing this applies on the next session. Defaulting to
+   * `direct` keeps every existing installation unaffected.
+   */
+  const toolExposure: ToolExposure = bootSettings.toolExposure === "deferred" ? "deferred" : "direct";
 
   setPackageAgentsGate(bootSettings.packageAgents);
   setPackageWorkflowsGate(bootSettings.packageWorkflows);
   seedProjectTrust(process.cwd());
 
-  const reloadCustomAgents = (strict = false) => {
-    const userAgents = loadCustomAgents(process.cwd(), strict);
+  const reloadCustomAgents = (strict = false, cwd: string = configCwd()) => {
+    const userAgents = loadCustomAgents(cwd, strict);
     registerAgents(userAgents);
   };
 
@@ -252,7 +269,9 @@ export default function (pi: ExtensionAPI) {
   const MANAGER_KEY = Symbol.for("pi-subagents:manager");
 
   const spawnResolved = (piRef: any, ctxRef: any, type: string, prompt: string | undefined, options: any) => {
-    reloadCustomAgents();
+    // The spawning session's project decides which agent files are in play —
+    // this repo's `configCwd` for the Agent tool, the caller's for RPC.
+    reloadCustomAgents(false, ctxRef?.cwd ?? configCwd());
     const dispatch = resolveSpawnType(type);
     if (!dispatch.ok) throw new Error(dispatch.message);
     const { state, callbacks } = createActivityTracker(resolveEffectiveMaxTurns(dispatch.type, options?.maxTurns));
@@ -308,7 +327,6 @@ export default function (pi: ExtensionAPI) {
     (globalThis as any)[MANAGER_KEY] = registryEntry;
   }
 
-  let currentCtx: ExtensionContext | undefined;
   const scheduler = new SubagentScheduler();
 
   let uiStyle: UIStyle = bootSettings.uiStyle ?? "pi";
@@ -413,40 +431,41 @@ export default function (pi: ExtensionAPI) {
     return normalizeMaxTurns(getAgentConfig(record.type)?.maxTurns ?? explicit ?? record.invocation?.maxTurns ?? getDefaultMaxTurns());
   }
 
-  applyAndEmitLoaded(
-    {
-      setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
-      setMaxConcurrentForeground: (n) => manager.setMaxConcurrentForeground(n),
-      setMaxConcurrentNested: (n) => manager.setMaxConcurrentNested(n),
-      setDefaultMaxTurns,
-      setGraceTurns,
-      setHeadlessWaitMinutes,
-      setDefaultJoinMode,
-      setBackgroundByDefault,
-      setSchedulingEnabled,
-      setScopeModels: setScopeModelsEnabled,
-      setStrictAgentFiles: (b) => { strictAgentFiles = b; },
-      setDisableDefaultAgents,
-      setToolDescriptionMode,
-      setFleetView: setFleetViewEnabled,
-      setAgentMentions: setAgentMentionMode,
-      setRememberAgents,
-      setOutputTranscript: setOutputTranscriptDefault,
-      setWorktreeIsolation: setWorktreeIsolationEnabled,
-      setWorkflowsEnabled,
-      setMaxSubagentDepth,
-      setFallbackSubagent,
-      setReportUsage,
-      setShowCost,
-      setShowModel,
-      setPackageAgents: setPackageAgentsGate,
-      setPackageWorkflows: setPackageWorkflowsGate,
-      setUncutPromptProviders,
-      setUIStyle,
-      setViewerStyle,
-    },
-    (event, payload) => pi.events.emit(event, payload),
-  );
+  const settingsAppliers: SettingsAppliers = {
+    setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
+    setMaxConcurrentForeground: (n) => manager.setMaxConcurrentForeground(n),
+    setMaxConcurrentNested: (n) => manager.setMaxConcurrentNested(n),
+    setDefaultMaxTurns,
+    setGraceTurns,
+    setHeadlessWaitMinutes,
+    setDefaultJoinMode,
+    setBackgroundByDefault,
+    setSchedulingEnabled,
+    setScopeModels: setScopeModelsEnabled,
+    setStrictAgentFiles: (b) => { strictAgentFiles = b; },
+    setDisableDefaultAgents,
+    setToolDescriptionMode,
+    setFleetView: setFleetViewEnabled,
+    setAgentMentions: setAgentMentionMode,
+    setRememberAgents,
+    setOutputTranscript: setOutputTranscriptDefault,
+    setWorktreeIsolation: setWorktreeIsolationEnabled,
+    setWorktreeTimeoutSeconds,
+    setWorkflowsEnabled,
+    setMaxSubagentDepth,
+    setFallbackSubagent,
+    setReportUsage,
+    setShowCost,
+    setShowModel,
+    setPackageAgents: setPackageAgentsGate,
+    setPackageWorkflows: setPackageWorkflowsGate,
+    setUncutPromptProviders,
+    setUIStyle,
+    setViewerStyle,
+  };
+  const emitSettings = (event: string, payload: unknown) => pi.events.emit(event, payload);
+
+  applyAndEmitLoaded(settingsAppliers, emitSettings);
 
   const workflowTasks = new Map<string, WorkflowTask>();
   /**
@@ -512,7 +531,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  const registeredAgentTool = withUsageReporting(agentTool, () => reportUsage, pendingUsage);
+  const registeredAgentTool = withUsageReporting({ ...agentTool, exposure: toolExposure }, () => reportUsage, pendingUsage);
   pi.registerTool(registeredAgentTool);
 
   const workflowTool = createWorkflowTool({
@@ -535,7 +554,22 @@ export default function (pi: ExtensionAPI) {
     trackRun: trackWorkflowRun,
   });
 
-  if (isWorkflowsEnabled()) pi.registerTool(workflowTool);
+  if (isWorkflowsEnabled()) pi.registerTool({ ...workflowTool, exposure: toolExposure });
+
+  // `deferred` has no fallback activation path of its own: `tool_search` is the
+  // only way to reach a deferred tool. Checked at session_start, not at load,
+  // because built-in extensions are not guaranteed to have registered yet. Best
+  // effort: a `tool_search` that loads later in the same session is not
+  // re-checked, which is why this warns instead of failing the session.
+  if (toolExposure === "deferred") {
+    pi.on("session_start", () => {
+      if (pi.getAllTools().some(tool => tool.name === "tool_search")) return;
+      console.warn(
+        '[pi-subagents-hub] toolExposure is "deferred" but tool_search is not active — this extension\'s tools are unreachable this session. ' +
+          'Enable it with `"defaultTools": ["+tool_search"]` in pi\'s settings, or set toolExposure back to "direct".',
+      );
+    });
+  }
 
   // ---- Headless drain (print / JSON mode) ----
   // Nothing follows a headless parent's run: pi prints its last message and
@@ -662,6 +696,7 @@ export default function (pi: ExtensionAPI) {
     setDisableDefaultAgents,
     getToolDescriptionMode,
     setToolDescriptionMode,
+    getConfigCwd: configCwd,
   };
 
   const workflowMenuDeps: WorkflowMenuDeps = {
@@ -819,6 +854,7 @@ export default function (pi: ExtensionAPI) {
       registerTurnGroup,
       getCurrentCtx: () => currentCtx,
       setCurrentCtx: (c) => { currentCtx = c; },
+      applySessionSettings: (c) => { applyAndEmitLoaded(settingsAppliers, emitSettings, c.cwd); },
     },
     handoff,
   );

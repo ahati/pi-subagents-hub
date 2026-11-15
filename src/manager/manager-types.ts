@@ -265,6 +265,12 @@ export interface SpawnOptions {
 export interface ResumeOptions {
   isBackground?: boolean;
   maxTurns?: number;
+  /**
+   * `maxTurns` is already resolved by the caller; `undefined` means unlimited.
+   * A nested resume sets this after reading the branch's own agent registry,
+   * so a missing limit cannot fall through to the process-global one.
+   */
+  maxTurnsResolved?: boolean;
   onTurnEnd?: (turnCount: number) => void;
   onToolActivity?: (activity: ToolActivity) => void;
   onTextDelta?: (delta: string, fullText: string) => void;

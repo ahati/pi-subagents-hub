@@ -3,6 +3,7 @@ import type { AgentRecord } from "../types.js";
 import {
   cleanupWorktree,
   createWorktree,
+  getWorktreeTimeoutSeconds,
   isWorktreeIsolationEnabled,
   pruneWorktrees,
   type WorktreeCleanupResult,
@@ -31,7 +32,8 @@ export class WorktreeCoordinator {
     const wt = await createWorktree(pi, baseCwd, id);
     if (!wt) {
       throw new Error(
-        'Cannot run with isolation: "worktree" — not a git repo, no commits yet, or `git worktree add` failed. ' +
+        'Cannot run with isolation: "worktree" — not a git repo, no commits yet, or `git worktree add` failed ' +
+        `(a large checkout can time out after ${getWorktreeTimeoutSeconds()}s; raise \`worktreeTimeoutSeconds\` in subagents.json). ` +
         'Initialize git and commit at least once, or omit `isolation`.',
       );
     }

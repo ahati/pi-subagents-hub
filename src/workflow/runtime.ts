@@ -25,6 +25,7 @@ import type { WorkflowAgentEntry, WorkflowEntry } from "./progress.js";
 import {
   type RunWorkflowOptions,
   WORKFLOW_AGENT_CAP,
+  WORKFLOW_FAILURE_REASON_LIMIT,
   WORKFLOW_ITEM_CAP,
   WORKFLOW_NESTED_CAP,
   WORKFLOW_PARK_STOP_ERROR,
@@ -57,6 +58,9 @@ import {
 
 export async function runWorkflow(options: RunWorkflowOptions): Promise<WorkflowRunResult> {
   const { script, host } = options;
+
+  /** What a skip records on the journal and hands the script, in one spelling. */
+  const SKIPPED_REASON = "Skipped by user.";
 
   assertBoundarySafe(options.args, "args");
 
@@ -233,14 +237,32 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       options.onProgress?.(entries);
     };
 
-    const respond = (callId: number, ok: boolean, value?: unknown, error?: string, fatal?: boolean) => {
+    const respond = (
+      callId: number,
+      ok: boolean,
+      value?: unknown,
+      error?: string,
+      fatal?: boolean,
+      agentLabel?: string,
+    ) => {
       // Cleared before the settled check: a launch answered by a run that is
       // already finishing is not an unawaited launch either.
       openLaunches.delete(callId);
       if (settled) return;
       // `spent` rides on every response, so the worker's `budget.spent()` is a
-      // mirror of this number rather than a second tally of its own.
-      worker.postMessage({ type: "response", callId, ok, value, error, fatal, spent: spentOutputTokens });
+      // mirror of this number rather than a second tally of its own. The label
+      // lets the worker file a failed call's reason under the name the script
+      // will ask for, without duplicating the host's label derivation there.
+      worker.postMessage({
+        type: "response",
+        callId,
+        ok,
+        value,
+        error,
+        fatal,
+        ...(agentLabel !== undefined ? { agentLabel } : {}),
+        spent: spentOutputTokens,
+      });
     };
 
     const finish = (result: Omit<WorkflowRunResult, "meta" | "progress" | "agentCount" | "replayedCount">) => {
@@ -441,11 +463,11 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       let toolCalls = 0;
       /** A skip before this attempt started may still follow a paid retry. */
       const settleSkipped = (extra: Partial<WorkflowAgentEntry>) => {
-        recordJournal?.({ path: payload.path, index, key, ok: false, ...resumeMark });
-        emit([{ ...base, queuedAt, ...extra, ...(tokens > 0 ? { tokens } : {}), ...(toolCalls > 0 ? { toolCalls } : {}), state: "error", skipped: true, error: "Skipped by user." }]);
+        recordJournal?.({ path: payload.path, index, key, ok: false, error: SKIPPED_REASON, ...resumeMark });
+        emit([{ ...base, queuedAt, ...extra, ...(tokens > 0 ? { tokens } : {}), ...(toolCalls > 0 ? { toolCalls } : {}), state: "error", skipped: true, error: SKIPPED_REASON }]);
         // `null`, exactly as a terminal failure gives — a skipped agent is one
         // the script's `.filter(Boolean)` was already written to survive.
-        respond(callId, true, null);
+        respond(callId, true, null, SKIPPED_REASON, false, label);
       };
 
       // Registered for exactly as long as the call is unanswered, which is the
@@ -615,7 +637,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           tokens += result.tokens ?? 0;
           toolCalls += result.toolCalls ?? 0;
           if (intent() === "skip") {
-            result = { ...result, ok: false, skipped: true, error: "Skipped by user." };
+            result = { ...result, ok: false, skipped: true, error: SKIPPED_REASON };
           }
 
           // The stop that produced this result was ours, so run the same call
@@ -660,11 +682,15 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           // whole mechanism exists to make cheap. A failed gate is recorded with
           // its output and the directory it ran in, so an entry that reads `ok:
           // false` can be told from a child that simply failed.
+          // The reason is bounded here, once, so the journal line and the value
+          // the script reads can never carry different amounts of provider text.
+          const failureReason = (result.error ?? "Agent failed.").slice(0, WORKFLOW_FAILURE_REASON_LIMIT);
           recordJournal?.({
             path: payload.path,
             index,
             key,
             ok: false,
+            error: failureReason,
             ...resumeMark,
             ...(gateOutcome !== undefined ? { gate: gateOutcome } : {}),
           });
@@ -675,11 +701,11 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
               ...common,
               state: "error",
               // Preserve both host-reported stops and explicit skips accepted during verification.
-              error: result.error ?? "Agent failed.",
+              error: failureReason,
               ...(result.skipped ? { skipped: true } : {}),
             },
           ]);
-          respond(callId, true, null);
+          respond(callId, true, null, failureReason, false, label);
           return;
         }
       } finally {

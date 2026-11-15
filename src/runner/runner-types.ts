@@ -213,13 +213,22 @@ import type { BareToolExecutor } from "../session-continue.js";
  * wiring the spawn path uses; `execute` is a `continueSessionBare` passthrough.
  * The turn limit is resolved as `runAgent` resolves it — an explicit `maxTurns`,
  * else the agent type's own `max_turns`, else the project default — and counted
- * afresh from the resume, bare continuation included (#368).
+ * afresh from the resume, bare continuation included (#368). A caller that
+ * already resolved it sets `maxTurnsResolved` so this layer does not read the
+ * process-global registry instead of the caller's.
  */
 export interface ResumeAgentOptions {
   /** The agent's type, for its own `max_turns`. Always known: the manager passes `record.type`. */
   type: SubagentType;
   /** Explicit turn limit for the resumed run, counted afresh from the resume (#368). */
   maxTurns?: number;
+  /**
+   * `maxTurns` is final; `undefined` means unlimited and must not be looked up
+   * again. Set by a caller that resolved it against the registry the agent
+   * belongs to (a nested resume reads the branch's config root), so the
+   * process-global registry cannot supply a different type's limit.
+   */
+  maxTurnsResolved?: boolean;
   /** Called at the end of each resumed turn with the count since the resume. */
   onTurnEnd?: (turnCount: number) => void;
   onToolActivity?: (activity: ToolActivity) => void;

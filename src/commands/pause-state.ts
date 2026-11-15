@@ -276,7 +276,7 @@ export class ParkGateController {
         customType: "subagent-notification",
         content: formatTaskNotification(live, 500, showCost) + footer,
         display: true,
-        details: buildNotificationDetails(live, 500, agentActivity.get(live.id)),
+        details: buildNotificationDetails(live, agentActivity.get(live.id)),
       }, { deliverAs: "followUp", triggerTurn: true }));
       return;
     }

@@ -20,6 +20,7 @@ vi.mock("../src/worktree.js", () => ({
   cleanupWorktree: vi.fn(() => ({ hasChanges: false })),
   pruneWorktrees: vi.fn(),
   isWorktreeIsolationEnabled: vi.fn(() => true),
+  getWorktreeTimeoutSeconds: vi.fn(() => 30),
 }));
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
@@ -934,6 +935,27 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
 
       await (await manager.resume(id, "again", undefined, { isBackground: true }))!.promise;
       expect(vi.mocked(resumeAgent).mock.calls.at(-1)![2]!.maxTurns).toBe(50);
+    });
+
+    // #423 — a caller that resolved the budget owns it; `undefined` is
+    // unlimited and must not be replaced by the limit the agent was spawned
+    // with, nor looked up again in the process-global registry.
+    it("does not replace a caller-resolved unlimited budget with the spawn limit", async () => {
+      manager = new AgentManager();
+      vi.mocked(runAgent).mockResolvedValue({ responseText: "first", session: mockSession() as any, aborted: false, steered: false });
+      const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+        description: "test",
+        isBackground: true,
+        invocation: { maxTurns: 50 },
+      });
+      await manager.getRecord(id)!.promise;
+      vi.mocked(resumeAgent).mockResolvedValue({ text: "second", aborted: false, steered: false });
+
+      await manager.resume(id, "more", undefined, { maxTurns: undefined, maxTurnsResolved: true });
+
+      const opts = vi.mocked(resumeAgent).mock.calls.at(-1)![2]!;
+      expect(opts.maxTurns).toBeUndefined();
+      expect(opts.maxTurnsResolved).toBe(true);
     });
 
     it("inline: abort() reaches the resumed run and the record stays stopped", async () => {

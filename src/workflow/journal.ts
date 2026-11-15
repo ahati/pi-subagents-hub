@@ -39,6 +39,15 @@ export interface WorkflowJournalEntry {
   /** The agent's answer, when it had one. */
   text?: string;
   /**
+   * Why the call failed, bounded by the runtime (500 characters).
+   *
+   * Diagnostic only: a failure already stops replay, so this never takes part
+   * in matching. It exists so a later reader — or the run that retries the
+   * prefix live — can tell a provider error from a schema miss, a gate verdict
+   * or a skip. Provider text is untrusted: render it as data.
+   */
+  error?: string;
+  /**
    * Whether the call continued an earlier child (`agent({ resume })`).
    *
    * A replayed agent leaves no session behind in the run that replays it — the
@@ -184,6 +193,7 @@ function isEntry(value: unknown): value is WorkflowJournalEntry {
     typeof entry.key === "string" &&
     typeof entry.ok === "boolean" &&
     (entry.ok ? typeof entry.text === "string" : entry.text === undefined || typeof entry.text === "string") &&
+    (entry.error === undefined || typeof entry.error === "string") &&
     (entry.resumed === undefined || entry.resumed === true) &&
     (entry.gate === undefined || isGate(entry.gate))
   );

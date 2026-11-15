@@ -3586,6 +3586,16 @@ describe("agent-runner turn limits", () => {
       expect(result.aborted).toBe(false);
     });
 
+    it("does not apply the project default to an already-resolved unlimited budget", async () => {
+      // The caller resolved the budget against its own registry and said
+      // "unlimited"; re-resolving here would read the global default instead.
+      setDefaultMaxTurns(2);
+      setGraceTurns(5);
+      const { session, result } = await resumeWithTurns(4, { maxTurns: undefined, maxTurnsResolved: true });
+      expect(session.steer).not.toHaveBeenCalled();
+      expect(result.steered).toBe(false);
+    });
+
     it("reports each resumed turn to the caller's counter", async () => {
       const onTurnEnd = vi.fn();
       await resumeWithTurns(3, { maxTurns: 10, onTurnEnd });

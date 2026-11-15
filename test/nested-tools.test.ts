@@ -7,6 +7,7 @@ import { loadCustomAgents } from "../src/custom-agents.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
 import { createAskAnswerTools, createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager, setMaxSubagentDepth } from "../src/nested-tools.js";
 import { encodeCwd } from "../src/output-file.js";
+import { getDefaultMaxTurns, setDefaultMaxTurns } from "../src/runner/runner-settings.js";
 
 let cwd: string;
 let manager: NestedAgentManager;
@@ -319,7 +320,73 @@ describe("child-safe nested Agent tools", () => {
 
     await execute(agent, { resume: "child-1", subagent_type: "scout", description: "continue", prompt: "Continue", max_turns: 3 });
 
-    expect(manager.resume).toHaveBeenCalledWith("child-1", "Continue", undefined, expect.objectContaining({ maxTurns: 3 }));
+    expect(manager.resume).toHaveBeenCalledWith("child-1", "Continue", undefined,
+      expect.objectContaining({ maxTurns: 3, maxTurnsResolved: true }));
+  });
+
+  // #423 — the budget comes from THIS branch's registry, and is final once
+  // resolved: the manager must not re-read the process-global registry.
+  it("falls back to the limit the nested agent was spawned with", async () => {
+    const [agent] = tools(["scout"]);
+    records.set("spawned", {
+      id: "spawned", type: "scout", status: "completed", result: "done",
+      parentAgentId: "parent-1", invocation: { maxTurns: 5 },
+    });
+
+    await execute(agent, { resume: "spawned", subagent_type: "scout", description: "continue", prompt: "Continue" });
+
+    expect(manager.resume).toHaveBeenCalledWith("spawned", "Continue", undefined,
+      expect.objectContaining({ maxTurns: 5, maxTurnsResolved: true }));
+  });
+
+  it("reads the branch registry, not the main one, for a nested resume budget", async () => {
+    const branch = mkdtempSync(join(tmpdir(), "nested-branch-"));
+    try {
+      const dir = join(branch, ".pi", "agents");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "scout.md"), "---\ndescription: scout\ntools: read\nmax_turns: 9\n---\nscout\n");
+      const [agent] = tools(["scout"], 1, 2, branch);
+      records.set("branch-child", {
+        id: "branch-child", type: "scout", status: "completed", result: "done", parentAgentId: "parent-1",
+      });
+
+      await execute(agent, {
+        resume: "branch-child", subagent_type: "scout", description: "continue", prompt: "Continue", max_turns: 3,
+      });
+
+      expect(manager.resume).toHaveBeenCalledWith("branch-child", "Continue", undefined,
+        expect.objectContaining({ maxTurns: 9, maxTurnsResolved: true }));
+    } finally {
+      rmSync(branch, { recursive: true, force: true });
+    }
+  });
+
+  it("does not borrow a same-named main-config agent's max_turns on resume", async () => {
+    // The main registry knows a `scout` with a limit; this branch's `scout`
+    // sets none. The nested resume must hand the manager a final, unlimited
+    // budget rather than let it re-resolve through the global registry.
+    writeAgent("scout", "max_turns: 7\n");
+    registerAgents(loadCustomAgents(cwd));
+    const branch = mkdtempSync(join(tmpdir(), "nested-branch-"));
+    const previousDefault = getDefaultMaxTurns();
+    try {
+      const dir = join(branch, ".pi", "agents");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "scout.md"), "---\ndescription: scout\ntools: read\n---\nscout\n");
+      const [agent] = tools(["scout"], 1, 2, branch);
+      records.set("branch-child", {
+        id: "branch-child", type: "scout", status: "completed", result: "done", parentAgentId: "parent-1",
+      });
+      setDefaultMaxTurns(undefined);
+
+      await execute(agent, { resume: "branch-child", subagent_type: "scout", description: "continue", prompt: "Continue" });
+
+      expect(manager.resume).toHaveBeenCalledWith("branch-child", "Continue", undefined,
+        expect.objectContaining({ maxTurns: undefined, maxTurnsResolved: true }));
+    } finally {
+      setDefaultMaxTurns(previousDefault);
+      rmSync(branch, { recursive: true, force: true });
+    }
   });
 
   it("reports a background child that fails to start as a tool error", async () => {

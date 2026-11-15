@@ -60,6 +60,24 @@ export function settleOutcome(
   record.completedAt ??= Date.now();
 }
 
+/**
+ * Turn limit handed to `resumeAgent`.
+ *
+ * A caller that already resolved the budget (a nested resume, against its
+ * branch's registry) is trusted: `undefined` means unlimited and must not be
+ * replaced by the spawn budget, nor looked up again in the global registry.
+ * Everyone else keeps the historical fill-in from the limit the agent was
+ * spawned with; the runner then applies the type's own `max_turns` and the
+ * project default.
+ */
+function resumeLimit(
+  record: AgentRecord,
+  options?: ResumeOptions,
+): { maxTurns?: number; maxTurnsResolved?: true } {
+  if (options?.maxTurnsResolved) return { maxTurns: options.maxTurns, maxTurnsResolved: true };
+  return { maxTurns: options?.maxTurns ?? record.invocation?.maxTurns };
+}
+
 export function failResume(record: AgentRecord, err: unknown): void {
   if (!externallyHalted(record)) {
     record.status = "error";
@@ -185,7 +203,7 @@ export async function resumeRecord(
 
   const callbacks = {
     type: record.type,
-    maxTurns: options?.maxTurns ?? record.invocation?.maxTurns,
+    ...resumeLimit(record, options),
     onTurnEnd: options?.onTurnEnd,
     onToolActivity: (activity: ToolActivity) => {
       countToolUse(record, activity);
@@ -286,7 +304,7 @@ export function startResume(
 
   const resumeOptions = {
     type: record.type,
-    maxTurns: options.maxTurns ?? record.invocation?.maxTurns,
+    ...resumeLimit(record, options),
     onTurnEnd: options.onTurnEnd,
     onToolActivity: (activity: ToolActivity) => {
       countToolUse(record, activity);

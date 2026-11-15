@@ -25,6 +25,7 @@ import {
   streamToOutputFile,
   writeInitialEntry,
 } from "./output-file.js";
+import { resolveResumeTurnLimit } from "./runner/runner-settings.js";
 import { formatAnswerSteer, formatQuestionCard, getForegroundOutcomeNote, getStatusNote, openQuestionsFooter, partialOutputSuffix } from "./status-note.js";
 import type {
   AgentConfig,
@@ -93,6 +94,8 @@ export interface NestedAgentManager {
   waitForBackgroundChild?(parentAgentId: string, signal?: AbortSignal): Promise<boolean>;
   resume(id: string, prompt: string, signal?: AbortSignal, options?: {
     maxTurns?: number;
+    /** `maxTurns` was resolved against this branch's registry; do not re-resolve. */
+    maxTurnsResolved?: boolean;
     onAssistantUsage?: (usage: LifetimeUsage) => void;
   }): Promise<AgentRecord | undefined>;
 }
@@ -239,10 +242,18 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         if (!ownsRecord(existing, context.parentAgentId)) {
           return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
         }
-        // Frontmatter authoritative, as on the spawn path; the manager falls
-        // back to the limit the child was spawned with, then the default.
+        // Frontmatter authoritative, as on the spawn path, then the call's
+        // limit, the limit the child was spawned with, and the default. Resolved
+        // here against THIS branch's registry: the manager's own fallback reads
+        // the process-global one, so a same-named main-config agent could
+        // otherwise impose its `max_turns` on a nested resume (#423).
         const resumed = await whileWaiting(context, () => context.manager.resume(params.resume!, params.prompt, signal, {
-          maxTurns: getAgentConfigIn(loadRegistry(), existing.type)?.maxTurns ?? params.max_turns,
+          maxTurns: resolveResumeTurnLimit(
+            getAgentConfigIn(loadRegistry(), existing.type)?.maxTurns,
+            params.max_turns,
+            existing.invocation?.maxTurns,
+          ),
+          maxTurnsResolved: true,
           onAssistantUsage: (usage) => {
             for (let id: string | undefined = context.parentAgentId; id !== undefined; ) {
               const ancestor = context.manager.getRecord(id);
