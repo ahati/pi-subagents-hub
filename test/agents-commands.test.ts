@@ -394,3 +394,61 @@ describe("/agents argument fallback", () => {
     expect(cmdCtx.ui.select).toHaveBeenCalledWith("Agents", expect.anything());
   });
 });
+
+describe("resuming queue-paused agents without a session", () => {
+  it("Agent({ resume }) unpauses a queue-paused agent that has no session yet", async () => {
+    const b = boot({ maxConcurrent: 1 });
+    await spawnRunning(b, "blocker", "Explore");
+
+    const queuedRes = await b.tools.get("Agent").execute(
+      "tc-queued",
+      { prompt: "queued task", description: "queued task", subagent_type: "general-purpose", run_in_background: true },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const queuedId = /Agent ID: (\S+)/.exec(textOf(queuedRes))![1];
+    expect(manager().getRecord(queuedId).status).toBe("queued");
+    expect(manager().getRecord(queuedId).session).toBeUndefined();
+
+    runCommand(b, `pause ${queuedId}`);
+    await flush();
+    expect(manager().getRecord(queuedId).status).toBe("paused");
+
+    const resumeRes = await b.tools.get("Agent").execute(
+      "tc-resume",
+      { prompt: "continue", description: "resume queued", subagent_type: "general-purpose", resume: queuedId, run_in_background: true },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    expect(textOf(resumeRes)).toContain("Agent queued in background.");
+    expect(manager().getRecord(queuedId).status).toBe("queued");
+  });
+
+  it("@handle mention unpauses a queue-paused agent instead of spawning a new one", async () => {
+    const b = boot({ maxConcurrent: 1 });
+    await spawnRunning(b, "blocker", "Explore");
+
+    const queuedRes = await b.tools.get("Agent").execute(
+      "tc-queued",
+      { prompt: "queued task", description: "queued task", subagent_type: "general-purpose", run_in_background: true },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const queuedId = /Agent ID: (\S+)/.exec(textOf(queuedRes))![1];
+    const handle = manager().getRecord(queuedId).handle;
+
+    runCommand(b, `pause ${queuedId}`);
+    await flush();
+    expect(manager().getRecord(queuedId).status).toBe("paused");
+
+    const spawnCallsBefore = vi.mocked(runAgent).mock.calls.length;
+    const inputHook = b.lifecycle.get("input");
+    const outcome = await inputHook({ text: `@${handle} please go`, source: "interactive" }, ctx());
+    expect(outcome).toEqual({ action: "handled" });
+    expect(manager().getRecord(queuedId).status).toBe("queued");
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(spawnCallsBefore);
+  });
+});

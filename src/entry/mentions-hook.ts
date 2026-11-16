@@ -111,7 +111,7 @@ export function registerMentionInputHook(pi: ExtensionAPI, deps: MentionHookDeps
         return { action: "handled" };
       }
 
-      if (record.session) {
+      if (record.session || record.status === "paused") {
         const wasPaused = record.status === "paused";
         const resumedRecord = await startBackgroundResume(ctx, record, mention.message, {
           outputTranscript: getAgentConfig(record.type)?.outputTranscript ?? getOutputTranscriptDefault(),

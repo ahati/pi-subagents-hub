@@ -332,7 +332,7 @@ export function createAgentTool(deps: AgentToolDeps) {
           return textResult(`Agent not found: "${resumeRef}". It may have been cleaned up.`);
         }
         const resumeId = existing.id;
-        if (!existing.session) {
+        if (!existing.session && existing.status !== "paused") {
           return textResult(`Agent "${resumeRef}" has no active session to resume.`);
         }
         const resumeMaxTurns = resumeTurnLimit(existing, params.max_turns as number | undefined);
