@@ -78,7 +78,7 @@ A [pi](https://pi.dev) extension that brings **Claude Code-style autonomous sub-
 - **Tool denylist** — block specific tools via `disallowed_tools` (or Claude Code's `disallowedTools`) frontmatter
 - **Styled completion notifications** — background agent results render as themed, compact notification boxes (icon, stats, result preview) instead of raw XML. Expandable to show the whole report, or a failed agent's error body when it wrote none. Group completions render each agent individually
 - **Event bus** — lifecycle events (`subagents:created`, `started`, `completed`, `failed`, `steered`, `paused`, `resumed`, `compacted`) and a per-message spend ledger (`subagents:usage`) emitted via `pi.events`, enabling other extensions to react to sub-agent activity
-- **Cross-extension RPC** — other pi extensions can spawn, stop, steer, pause/resume, and join subagents via the `pi.events` event bus (`subagents:rpc:ping`, `subagents:rpc:spawn`, `subagents:rpc:stop`, `subagents:rpc:pause`, `subagents:rpc:resume`, `subagents:rpc:consume`, `subagents:rpc:steer`). Standardized reply envelopes with protocol versioning; the `ping` reply advertises a `capabilities` array naming the request channels this build answers. Emits `subagents:ready` on session start. **[Full reference](https://github.com/tintinweb/pi-subagents/blob/master/docs/rpc.md)**
+- **Cross-extension RPC** — other pi extensions can spawn, stop, steer, pause/resume, and join subagents via the `pi.events` event bus (`subagents:rpc:ping`, `subagents:rpc:spawn`, `subagents:rpc:stop`, `subagents:rpc:pause`, `subagents:rpc:resume`, `subagents:rpc:consume`, `subagents:rpc:steer`, `subagents:rpc:get`, `subagents:rpc:list`). Standardized reply envelopes with protocol versioning; the `ping` reply advertises a `capabilities` array naming the request channels this build answers and a `features` list naming the additions that are not channels. Emits `subagents:ready` on session start. **[Full reference](https://github.com/tintinweb/pi-subagents/blob/master/docs/rpc.md)**
 - **Schedule subagents** — pass `schedule` to the `Agent` tool to fire on cron / interval / one-shot. Session-scoped jobs with PID-locked persistence; results land via the same `subagent-notification` path as manual background completions; manage via `/agents → Scheduled jobs`
 - **Model scope enforcement** — opt-in validation that subagent model choices stay within your pi `enabledModels` allowlist (sourced from `/scoped-models`, with both global and project-local pi settings honored). Caller-supplied out-of-scope → hard error to orchestrator; frontmatter-pinned out-of-scope → warning + runs anyway (frontmatter authoritative). Toggle via `/agents → Settings → Scope models`
 
@@ -939,14 +939,21 @@ const unsub = pi.events.on(`subagents:rpc:ping:reply:${requestId}`, (reply) => {
   if (!reply.success) return;
   console.log("Protocol version:", reply.data.version);
   // The request channels this build answers — "spawn", "stop", "pause",
-  // "resume", "consume", "steer". Older builds omit the field.
+  // "resume", "consume", "steer", "get", "list". Older builds omit the field.
   const capabilities: string[] = reply.data.capabilities ?? [];
+  // Additions that are not channels (they change a reply or an event, rather
+  // than adding one). Append-only: check with `.includes(...)`.
+  const features: string[] = reply.data.features ?? [];
   if (capabilities.includes("consume")) {
     // safe to consume results on this build
   }
 });
 pi.events.emit("subagents:rpc:ping", { requestId });
 ```
+
+### Snapshots
+
+A listener that loaded after the events it needed had already fired can read state instead of waiting for the next event. `subagents:rpc:get` (`{ requestId, agentId }`) returns `{ agent }` and `subagents:rpc:list` returns `{ agents }`, each an array of the same shape the completion events carry — plus `notificationPending`, set while a finished agent's completion is still waiting for the parent's next turn. Nested and workflow-owned agents are included, with `parentAgentId` / `workflowId` set; the caller filters. A record stays readable for the ten minutes the manager keeps it after it settles.
 
 `capabilities` is derived from the handlers this build installs, so it cannot drift from what the extension actually answers. It lists channels, not behaviour: it does not say whether `scopeModels` is enforced or worktree isolation is enabled, so error envelopes stay authoritative. A reply with no `capabilities` field comes from a build that predates it — read it as version 2 alone (`ping`, `spawn`, `stop`) and keep the send-and-timeout fallback for the rest.
 

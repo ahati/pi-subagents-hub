@@ -9,7 +9,7 @@ import { isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.
  * Hard-coded on purpose: the advertised capabilities are a contract, so this
  * must not be derived from the implementation's own list.
  */
-const EXPECTED_CAPABILITIES = ["consume", "pause", "resume", "spawn", "steer", "stop"]; // sorted
+const EXPECTED_CAPABILITIES = ["consume", "get", "list", "pause", "resume", "spawn", "steer", "stop"]; // sorted
 
 /** Simple in-process event bus for testing. */
 function createEventBus(): EventBus {
@@ -42,6 +42,21 @@ function createRecordingEventBus() {
   };
 }
 
+/** A record shaped enough for `toSubagentInfo` to read. */
+function record(over: Record<string, unknown> = {}) {
+  return {
+    id: "agent-42",
+    type: "general-purpose",
+    description: "x",
+    status: "completed",
+    toolUses: 0,
+    startedAt: 0,
+    lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+    ownUsage: { input: 0, output: 0, cacheWrite: 0 },
+    ...over,
+  };
+}
+
 describe("cross-extension RPC", () => {
   let events: EventBus;
   let manager: SpawnCapable;
@@ -57,6 +72,8 @@ describe("cross-extension RPC", () => {
       pauseAgent: vi.fn().mockReturnValue(true),
       resumeAgent: vi.fn().mockResolvedValue(true),
       getRecord: vi.fn().mockReturnValue({}),
+      listAgents: vi.fn().mockReturnValue([record()]),
+      isNotificationPending: vi.fn().mockReturnValue(false),
       consumeResult: vi.fn().mockReturnValue(true),
       steer: vi.fn().mockResolvedValue(true),
     };
@@ -78,6 +95,7 @@ describe("cross-extension RPC", () => {
       expect(data.version).toBe(PROTOCOL_VERSION);
       // Sorted: the wire order is incidental, the set is the contract.
       expect([...data.capabilities].sort()).toEqual(EXPECTED_CAPABILITIES);
+      expect(data.features).toEqual(expect.arrayContaining(["get", "list", "notification-pending"]));
     });
 
     it("advertises nothing it cannot answer — every capability has a live handler", async () => {
@@ -99,6 +117,8 @@ describe("cross-extension RPC", () => {
         resume: { agentId: "agent-42" },
         consume: { agentId: "agent-42" },
         steer: { agentId: "agent-42", message: "x" },
+        get: { agentId: "agent-42" },
+        list: {},
       };
 
       for (const capability of capabilities) {
@@ -648,6 +668,64 @@ describe("cross-extension RPC", () => {
   });
 
   // --- concurrent requests ---
+
+  // --- get / list ---
+
+  describe("get and list RPCs", () => {
+    it("returns the agent's public shape, with a pending notification flagged", async () => {
+      (manager.isNotificationPending as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      registerRpcHandlers(deps);
+      const reply = vi.fn();
+      events.on("subagents:rpc:get:reply:req-g1", reply);
+      events.emit("subagents:rpc:get", { requestId: "req-g1", agentId: "agent-42" });
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      const { success, data } = reply.mock.calls[0][0];
+      expect(success).toBe(true);
+      expect(data.agent).toMatchObject({ id: "agent-42", status: "completed", notificationPending: true });
+    });
+
+    it("errors for an id it does not hold", async () => {
+      registerRpcHandlers(deps);
+      const reply = vi.fn();
+      events.on("subagents:rpc:get:reply:req-g2", reply);
+      events.emit("subagents:rpc:get", { requestId: "req-g2", agentId: "nope" });
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      expect(reply).toHaveBeenCalledWith({ success: false, error: "Agent not found" });
+    });
+
+    it("lists every record the manager holds, owned ones included", async () => {
+      (manager.listAgents as ReturnType<typeof vi.fn>).mockReturnValue([
+        record(),
+        record({ id: "child-1", parentAgentId: "agent-42", depth: 2 }),
+      ]);
+      registerRpcHandlers(deps);
+      const reply = vi.fn();
+      events.on("subagents:rpc:list:reply:req-l1", reply);
+      events.emit("subagents:rpc:list", { requestId: "req-l1" });
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      const { data } = reply.mock.calls[0][0];
+      expect(data.agents.map((agent: { id: string }) => agent.id)).toEqual(["agent-42", "child-1"]);
+      expect(data.agents[1].parentAgentId).toBe("agent-42");
+    });
+
+    it("unsub stops responding to both channels", async () => {
+      const { unsubGet, unsubList } = registerRpcHandlers(deps);
+      unsubGet();
+      unsubList();
+
+      const reply = vi.fn();
+      events.on("subagents:rpc:get:reply:req-g3", reply);
+      events.on("subagents:rpc:list:reply:req-l3", reply);
+      events.emit("subagents:rpc:get", { requestId: "req-g3", agentId: "agent-42" });
+      events.emit("subagents:rpc:list", { requestId: "req-l3" });
+
+      await new Promise(r => setTimeout(r, 20));
+      expect(reply).not.toHaveBeenCalled();
+    });
+  });
 
   describe("concurrent requests", () => {
     it("handles multiple simultaneous spawn requests independently", async () => {

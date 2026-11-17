@@ -210,6 +210,10 @@ export function registerSessionLifecycle(
           spawn: spawnTopLevel,
           awaitStartup: (id) => manager.awaitStartup(id),
           getRecord: (id) => manager.getRecord(id),
+          listAgents: () => manager.listAgents(),
+          // The notification can wait for the parent's next boundary or for its
+          // group, so "settled" and "reported" are different states (#103).
+          isNotificationPending: (id) => outbox.has(id) || groupJoin.isHolding(id),
           abort: (id) => manager.abort(id),
           pauseAgent: (id) => {
             const record = manager.getRecord(id);

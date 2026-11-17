@@ -17,6 +17,7 @@
 import { isTopLevelAgent } from "./agent-manager.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
+import { type SubagentInfo, toSubagentInfo } from "./subagent-info.js";
 import type { AgentRecord } from "./types.js";
 
 /** Minimal event bus interface needed by the RPC handlers. */
@@ -36,7 +37,7 @@ export type RpcReply<T = void> =
  * you are reading. Deliberately no runtime list beside it — the set is derived
  * from the handlers `registerRpcHandlers` wires, not declared.
  */
-export type RpcCapability = "spawn" | "stop" | "pause" | "resume" | "consume" | "steer";
+export type RpcCapability = "spawn" | "stop" | "pause" | "resume" | "consume" | "steer" | "get" | "list";
 
 /**
  * RPC protocol version — bumped only when an existing envelope or method
@@ -44,6 +45,17 @@ export type RpcCapability = "spawn" | "stop" | "pause" | "resume" | "consume" | 
  * ping reply's `capabilities` instead.
  */
 export const PROTOCOL_VERSION = 2;
+
+/**
+ * What this build supports, on the `ping` reply.
+ *
+ * The envelope and spawn contract are still `PROTOCOL_VERSION` 2; these name the
+ * additions a caller may need to detect. A missing `features` array means a
+ * build older than all of them. Append only: a consumer checks
+ * `features.includes(...)`. `capabilities` stays the channel inventory, derived
+ * from the wired handlers.
+ */
+export const FEATURES = ["get", "list", "notification-pending"] as const;
 
 /** Minimal AgentManager interface needed by the spawn/stop/consume/pause/resume RPCs. */
 export interface SpawnCapable {
@@ -66,11 +78,19 @@ export interface SpawnCapable {
    */
   resumeAgent(id: string, prompt?: string): Promise<boolean>;
   /**
-   * The record behind an id, for the stop handler's ownership check. Narrowed
-   * to the two fields `isTopLevelAgent` reads, so the RPC layer keeps its
-   * deliberately shallow view of the manager.
+   * The record behind an id, for the stop handler's ownership check and for
+   * `get`. Narrowed to the two fields `isTopLevelAgent` reads — `get` builds its
+   * snapshot from `listAgents`, which carries the whole record.
    */
   getRecord(id: string): Pick<AgentRecord, "parentAgentId" | "workflowId"> | undefined;
+  /** Every record the manager holds, owned agents included, any status. */
+  listAgents(): AgentRecord[];
+  /**
+   * Whether the agent has settled but the parent has not been sent its
+   * completion notification yet — still held for the parent's next boundary
+   * or for its `group`. A notification that will start a parent turn.
+   */
+  isNotificationPending(id: string): boolean;
   /**
    * Mark a settled agent's result as read by the caller, suppressing the
    * completion notification — what `get_subagent_result` does when it returns
@@ -99,6 +119,8 @@ export interface RpcHandle {
   unsubResume: () => void;
   unsubConsume: () => void;
   unsubSteer: () => void;
+  unsubGet: () => void;
+  unsubList: () => void;
 }
 
 /**
@@ -153,6 +175,7 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
       // have run by the time a request can arrive — registration is synchronous
       // and nothing emits ping from inside it.
       capabilities: [...capabilities],
+      features: [...FEATURES],
     };
   });
 
@@ -286,5 +309,36 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
     },
   );
 
-  return { unsubPing, unsubSpawn, unsubStop, unsubPause, unsubResume, unsubConsume, unsubSteer };
+  // Snapshots, for a listener that joined after the lifecycle events it needed
+  // had already fired — bound late, or reloaded mid-run. Reads only, so owned
+  // agents are included: they carry `parentAgentId` / `workflowId` exactly as
+  // on the events, and the caller filters. `assertOwned` guards only mutations.
+  //
+  // Snapshots also say what the events cannot: `notificationPending`, set while
+  // a settled agent's completion is still on its way to the parent. An
+  // orchestrator that waits for "nothing active" must wait for it too, or the
+  // notification starts a parent turn right after it concluded none would
+  // (#103). Not on the events: `completed` fires before the notification is
+  // queued, so there it would always read false.
+  const snapshot = (record: AgentRecord) => ({
+    ...toSubagentInfo(record),
+    ...(manager.isNotificationPending(record.id) ? { notificationPending: true } : {}),
+  });
+
+  const unsubGet = wire<{ requestId: string; agentId: string }>(
+    "get", ({ agentId }) => {
+      const record = manager.listAgents().find(candidate => candidate.id === agentId);
+      if (!record) throw new Error("Agent not found");
+      return { agent: snapshot(record) };
+    },
+  );
+
+  const unsubList = wire(
+    "list", () => ({ agents: manager.listAgents().map(record => snapshot(record)) }),
+  );
+
+  return {
+    unsubPing, unsubSpawn, unsubStop, unsubPause, unsubResume, unsubConsume, unsubSteer,
+    unsubGet, unsubList,
+  };
 }
