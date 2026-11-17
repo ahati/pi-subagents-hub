@@ -458,6 +458,34 @@ describe("resuming queue-paused agents without a session", () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(spawnCallsBefore);
   });
 
+  it("/continue on a queue-paused agent announces no new run", async () => {
+    // Unparking the original spawn is not a new run: the record already exists,
+    // and `subagents:created` is the event an extension uses to register one.
+    const b = boot({ maxConcurrent: 1 });
+    await spawnRunning(b, "blocker", "Explore");
+    const queuedRes = await b.tools.get("Agent").execute(
+      "tc-queued",
+      { prompt: "queued task", description: "queued task", subagent_type: "general-purpose", run_in_background: true },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const queuedId = /Agent ID: (\S+)/.exec(textOf(queuedRes))![1];
+    runCommand(b, `pause ${queuedId}`);
+    await flush();
+
+    const created = () =>
+      vi.mocked(b.pi.events.emit).mock.calls.filter(call => call[0] === "subagents:created").length;
+    const before = created();
+    const contCtx = ctx();
+    await b.commands.get("continue").handler("", contCtx);
+    await flush();
+
+    expect(manager().getRecord(queuedId).status).toBe("queued");
+    expect(contCtx.ui.notify).toHaveBeenCalledWith("Continued 1 agent.", "info");
+    expect(created()).toBe(before);
+  });
+
   it("/continue unpauses a queue-paused agent back to queued", async () => {
     const b = boot({ maxConcurrent: 1 });
     await spawnRunning(b, "blocker", "Explore");

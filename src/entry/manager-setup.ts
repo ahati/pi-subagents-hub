@@ -282,12 +282,6 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
     const isTopLevel = isTopLevelAgent(existing);
     const isGated = gateOf(existing)?.closed === true;
     const joinMode = isTopLevel ? resolveJoinMode(getDefaultJoinMode(), true) : undefined;
-    existing.toolCallId = opts.toolCallId;
-    if (joinMode) existing.joinMode = joinMode;
-    if (opts.outputTranscript) {
-      existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
-      ensureOutputFile(existing.outputFile);
-    }
     const transcriptAnchor = existing.session?.messages.length ?? 0;
 
     let bgState = agentActivity.get(id);
@@ -299,44 +293,56 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
       bgState.session = existing.session;
     }
 
-    const record = await manager.resume(id, prompt, undefined, {
+    /**
+     * What belongs to a NEW RUN, as opposed to the resume call that asked for it.
+     *
+     * `onStarted` fires from `startResume`, so this runs for a resume that starts
+     * now and for one that waits in the pool behind the concurrency limit — and
+     * never for the two outcomes that start no run: opening a pause gate (the run
+     * never stopped) and unparking a record that had not started yet (the
+     * original spawn's wiring owns that run, its transcript and its `created`
+     * event). Doing this at accept time instead put a queued record in the widget
+     * as running and re-announced an agent that already existed.
+     */
+    const wireNewRun = (): void => {
+      const rec = manager.getRecord(id);
+      if (!rec) return;
+      if (opts.outputTranscript) {
+        rec.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
+        ensureOutputFile(rec.outputFile);
+        if (rec.session) {
+          rec.outputCleanup = streamToOutputFile(rec.session, rec.outputFile, id, ctx.cwd, transcriptAnchor);
+        }
+      }
+      rec.toolCallId = opts.toolCallId;
+      if (joinMode) rec.joinMode = joinMode;
+      if (isTopLevel && opts.toolCallId !== undefined) joinTurnGroup(id, joinMode);
+      if (bgState) agentActivity.set(id, bgState);
+      if (isTopLevel) {
+        widget.markRunning(id);
+        widget.ensureTimer();
+        widget.update();
+      }
+      fleet.ensureTimer();
+      fleet.update();
+      if (isTopLevel && !isGated) {
+        pi.events.emit("subagents:created", {
+          id,
+          type: existing.type,
+          description: existing.description,
+          isBackground: true,
+        });
+      }
+    };
+
+    return manager.resume(id, prompt, undefined, {
       isBackground: true,
       maxTurns: opts.maxTurns,
       onTurnEnd: bgCallbacks?.onTurnEnd,
       onToolActivity: bgCallbacks?.onToolActivity,
       onAssistantUsage: bgCallbacks?.onAssistantUsage,
-      onStarted: () => {
-        const rec = manager.getRecord(id);
-        if (rec?.session && rec.outputFile) {
-          rec.outputCleanup = streamToOutputFile(rec.session, rec.outputFile, id, ctx.cwd, transcriptAnchor);
-        }
-      },
+      onStarted: wireNewRun,
     });
-    if (!record) return undefined;
-
-    if (isTopLevel && opts.toolCallId !== undefined) joinTurnGroup(id, joinMode);
-
-    if (bgState) {
-      agentActivity.set(id, bgState);
-    }
-    if (isTopLevel) {
-      widget.markRunning(id);
-      widget.ensureTimer();
-      widget.update();
-    }
-    fleet.ensureTimer();
-    fleet.update();
-
-    if (isTopLevel && !isGated) {
-      pi.events.emit("subagents:created", {
-        id,
-        type: existing.type,
-        description: existing.description,
-        isBackground: true,
-      });
-    }
-
-    return record;
   }
 
   return {
