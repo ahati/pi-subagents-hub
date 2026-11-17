@@ -424,6 +424,9 @@ describe("resuming queue-paused agents without a session", () => {
     );
     expect(textOf(resumeRes)).toContain("Agent queued in background.");
     expect(manager().getRecord(queuedId).status).toBe("queued");
+    // A record parked before its first run has no transcript to steer, so the
+    // prompt rides the queue entry and is flushed when the run starts.
+    expect(manager().getRecord(queuedId).pendingSteers).toEqual(["continue"]);
   });
 
   it("@handle mention unpauses a queue-paused agent instead of spawning a new one", async () => {
@@ -446,9 +449,12 @@ describe("resuming queue-paused agents without a session", () => {
 
     const spawnCallsBefore = vi.mocked(runAgent).mock.calls.length;
     const inputHook = b.lifecycle.get("input");
-    const outcome = await inputHook({ text: `@${handle} please go`, source: "interactive" }, ctx());
+    const mentionCtx = ctx();
+    const outcome = await inputHook({ text: `@${handle} please go`, source: "interactive" }, mentionCtx);
     expect(outcome).toEqual({ action: "handled" });
     expect(manager().getRecord(queuedId).status).toBe("queued");
+    expect(manager().getRecord(queuedId).pendingSteers).toEqual(["please go"]);
+    expect(mentionCtx.ui.notify).toHaveBeenCalledWith(`Queued @${handle}`, "info");
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(spawnCallsBefore);
   });
 });

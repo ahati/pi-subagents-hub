@@ -142,6 +142,9 @@ export async function resumeRecord(
     throw new Error(`Agent "${record.id}" is still ${record.status}. Wait for it to finish or steer it.`);
   }
   if (!record.session) {
+    // A record parked before its first run has no transcript to continue. The
+    // message the caller sent rides the queue entry instead, so it is not lost.
+    if (prompt) record.pendingSteers = [...(record.pendingSteers ?? []), prompt];
     if (!unpause(id)) return undefined;
     if (!options?.isBackground) await waitInline(record, signal, () => abort(id));
     return record;

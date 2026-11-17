@@ -7,7 +7,7 @@ import { getAgentConfig, getAvailableTypes, resolveSpawnType, resolveType } from
 import { generateDockerName } from "../docker-names.js";
 import { buildDetails, createActivityTracker, formatLifetimeTokens, textResult } from "../entry/renderers.js";
 import { resolveAgentInvocationConfig, resolveJoinMode } from "../invocation-config.js";
-import { gateOf } from "../manager/manager-types.js";
+import { gateOf, isResumable } from "../manager/manager-types.js";
 import { describeModel, findRegisteredModel, resolveModel } from "../model-resolver.js";
 import { checkModelScope } from "../model-scope.js";
 import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "../output-file.js";
@@ -332,7 +332,7 @@ export function createAgentTool(deps: AgentToolDeps) {
           return textResult(`Agent not found: "${resumeRef}". It may have been cleaned up.`);
         }
         const resumeId = existing.id;
-        if (!existing.session && existing.status !== "paused") {
+        if (!isResumable(existing)) {
           return textResult(`Agent "${resumeRef}" has no active session to resume.`);
         }
         const resumeMaxTurns = resumeTurnLimit(existing, params.max_turns as number | undefined);

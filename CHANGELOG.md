@@ -69,6 +69,8 @@ check the entries below for behaviour changes.
 
 - **A nested `Agent` tool lists the agents its caller may spawn, with what each one is for.** It named the allowed types only, so a delegating agent could not tell them apart; the description now lists each allowed agent with its description and tools, as the main session's tool does, and follows `toolDescriptionMode: "compact"`. ([tintinweb/pi-subagents#457](https://github.com/tintinweb/pi-subagents/issues/457) — thanks [@WinPooh32](https://github.com/WinPooh32) for the report and [@tintinweb](https://github.com/tintinweb) for the fix)
 
+- **A queued agent paused before its first run can be resumed by `Agent({ resume })` and `@handle`.** Both surfaces required a saved session, so a mention spawned a second agent and a resume answered "no active session". The message now rides `pendingSteers` and is flushed when the queued run starts, and a requeue reports `Queued @x` instead of `Resuming @x`. ([#21](https://github.com/ahati/pi-subagents-hub/pull/21))
+
 ## [2026.11.131] - 2026-11-13
 
 > **⚠️ Behavior change — a workflow starts only when the user asks for one** ([#451](https://github.com/tintinweb/pi-subagents/pull/451)). A request for a number of agents, like "use 10 agents to …", now runs parallel `Agent` calls instead of a `SubagentWorkflow`. To run a workflow, say so ("use a workflow") or name a saved workflow.

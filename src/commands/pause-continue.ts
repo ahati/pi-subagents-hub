@@ -8,7 +8,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
+import { type AgentManager, isResumable, isTopLevelAgent } from "../agent-manager.js";
 import { reopenTarget } from "../agent-record-entry.js";
 import { getDefaultMaxTurns, normalizeMaxTurns } from "../agent-runner.js";
 import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
@@ -114,7 +114,7 @@ export async function resumeAgentById(
   deps: PauseContinueDeps,
   prompt?: string,
 ): Promise<boolean> {
-  const resumed = record.session
+  const resumed = isResumable(record)
     ? await resumeAgentSession(ctx, record, deps.startBackgroundResume, prompt)
     : deps.manager.unpause(record.id);
   if (resumed) {

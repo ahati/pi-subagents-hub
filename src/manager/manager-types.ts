@@ -101,6 +101,14 @@ export function externallyHalted(record: Pick<AgentRecord, "status">): boolean {
 }
 
 /**
+ * Whether this record can be resumed: a saved session continues its transcript,
+ * and a record parked before its first run is unpaused instead.
+ */
+export function isResumable(record: Pick<AgentRecord, "session" | "status">): boolean {
+  return record.session !== undefined || record.status === "paused";
+}
+
+/**
  * A record with the pause gate attached.
  */
 export type GatedRecord = AgentRecord & { pauseGate?: PauseGate };

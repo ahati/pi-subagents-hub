@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { AgentManager } from "../agent-manager.js";
 import { getAgentConfig, getAvailableTypes, getConfig } from "../agent-types.js";
 import { type PauseContinueDeps, resumePausedChildren, reviveTombstone } from "../commands/pause-continue.js";
+import { isResumable } from "../manager/manager-types.js";
 import {
   describeMention,
   handleBase,
@@ -111,15 +112,18 @@ export function registerMentionInputHook(pi: ExtensionAPI, deps: MentionHookDeps
         return { action: "handled" };
       }
 
-      if (record.session || record.status === "paused") {
+      if (isResumable(record)) {
         const wasPaused = record.status === "paused";
         const resumedRecord = await startBackgroundResume(ctx, record, mention.message, {
           outputTranscript: getAgentConfig(record.type)?.outputTranscript ?? getOutputTranscriptDefault(),
           maxTurns: resumeTurnLimit(record),
         });
         if (resumedRecord && wasPaused) await resumePausedChildren(ctx, record, pauseDeps);
+        const queued = resumedRecord?.status === "queued";
         ctx.ui.notify(
-          resumedRecord ? `Resuming ${target}` : `Could not resume ${target} — it is still running.`,
+          resumedRecord
+            ? `${queued ? "Queued" : "Resuming"} ${target}`
+            : `Could not resume ${target} — it is ${record.status}.`,
           resumedRecord ? "info" : "warning",
         );
         return { action: "handled" };
