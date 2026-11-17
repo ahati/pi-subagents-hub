@@ -9,6 +9,9 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+> **⚠️ Behavior change — lifecycle events now cover nested and workflow agents** ([#442](https://github.com/tintinweb/pi-subagents/issues/442)). `subagents:started`, `:completed`, `:failed`, `:steered` and `:compacted` used to be emitted for the session's own agents only. Nested subagents and a workflow's children now emit them too, with `parentAgentId` or `workflowId` set and `depth` saying how deep. To keep the old view, ignore events where either field is set.
+
+
 ### Added
 
 - **`pi -p` and JSON mode keep the run open for background work.** A turn that ends while background agents or workflows are still running now waits at `agent_before_settle`, reports on stderr, and hands the completions to the model as a continuing turn; `headlessWaitMinutes` (default `0` = no limit) stops the work at that ceiling. TUI and RPC sessions never wait. ([tintinweb/pi-subagents#452](https://github.com/tintinweb/pi-subagents/pull/452) — thanks [@tintinweb](https://github.com/tintinweb); ported in [#17](https://github.com/ahati/pi-subagents-hub/pull/17))
@@ -36,6 +39,8 @@ check the entries below for behaviour changes.
 - **A bus caller can read agent state with `subagents:rpc:get` and `list`.** A listener that bound late, or reloaded mid-run, had no way to catch up except the private in-process registry. Both channels return the completion-event shape, nested and workflow-owned agents included, plus `notificationPending` while a finished agent's completion is still waiting for the parent's next turn — the one state the events cannot carry, because `completed` fires before the notification is queued. `ping` also returns a `features` list naming the additions that are not channels; `capabilities` stays the channel inventory. ([tintinweb/pi-subagents#450](https://github.com/tintinweb/pi-subagents/pull/450) — thanks [@sergio-agosti](https://github.com/sergio-agosti) for #442 and [@ramhaidar](https://github.com/ramhaidar) for #103)
 
 - **Workflow runs are observable on the bus.** A background `SubagentWorkflow` run emitted nothing, so a host mirroring background work could not tell a run was still going after the parent's turn ended. A run now brackets itself with `subagents:workflow_started` and `subagents:workflow_settled`, each carrying a `WorkflowInfo` summary, and its live per-agent detail (phases, state, previews) is pulled with the new `subagents:rpc:workflow_get` / `workflow_list` channels rather than pushed. `ping` advertises `workflow-events`, `workflow-get` and `workflow-list`. ([tintinweb/pi-subagents#463](https://github.com/tintinweb/pi-subagents/pull/463) — thanks [@simenM84](https://github.com/simenM84))
+
+- **Lifecycle events cover nested and workflow agents.** An extension following every agent had to scrape session files to see an owned agent start or finish. They now emit `started`, `completed`, `failed`, `steered` and `compacted` with `parentAgentId` / `workflowId` set and `depth`, and still get no completion message, saved record or widget row of their own. The ownership guard on stop/pause/resume/steer is unchanged. ([tintinweb/pi-subagents#450](https://github.com/tintinweb/pi-subagents/pull/450) — thanks [@sergio-agosti](https://github.com/sergio-agosti))
 
 ### Changed
 

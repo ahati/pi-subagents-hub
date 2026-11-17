@@ -62,6 +62,53 @@ function ctx() {
 
 const textOf = (r: any): string => r.content[0].text;
 
+describe("owned agents on the bus", () => {
+  afterEach(() => {
+    delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    vi.restoreAllMocks();
+  });
+
+  it("reports a nested agent's completion, with its parent id and depth", async () => {
+    const session = { dispose: vi.fn(), steer: vi.fn().mockResolvedValue(undefined) };
+    let releaseParent!: (value: unknown) => void;
+    vi.mocked(runAgent)
+      // The parent stays running, so its completion message has somewhere to go.
+      .mockImplementationOnce(() => new Promise(resolve => { releaseParent = resolve; }) as any)
+      .mockResolvedValueOnce({ responseText: "child done", session, aborted: false, steered: false });
+    const { pi } = makePi();
+    subagentsExtension(pi);
+    // The registry facade strips `parentAgentId` (forgery guard); the nested
+    // tools call the manager itself, so this test does too.
+    const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")].manager;
+
+    // Spawned through the manager with a parent, as the nested tools do.
+    const parent = manager.spawn(pi, ctx(), "general-purpose", "parent", { description: "p", isBackground: true });
+    const child = manager.spawn(pi, ctx(), "general-purpose", "child", {
+      description: "c",
+      isBackground: true,
+      parentAgentId: parent,
+      depth: 2,
+    });
+    await manager.getRecord(child)!.promise;
+
+    const completed = pi.events.emit.mock.calls.find(
+      (call: any[]) => call[0] === "subagents:completed" && call[1]?.id === child,
+    )?.[1];
+    expect(completed).toMatchObject({
+      id: child,
+      parentAgentId: parent,
+      depth: 2,
+      status: "completed",
+      result: "child done",
+    });
+    // And the parent still gets its own completion message (#442 keeps both).
+    // It arrives as a parked steer: the parent's session has not been created yet.
+    expect(manager.getRecord(parent)!.pendingSteers?.some(m => m.includes("child done"))).toBe(true);
+    releaseParent({ responseText: "parent done", session, aborted: false, steered: false });
+    await manager.getRecord(parent)!.promise;
+  });
+});
+
 describe("the completion event's shape", () => {
   afterEach(() => {
     delete (globalThis as any)[Symbol.for("pi-subagents:manager")];

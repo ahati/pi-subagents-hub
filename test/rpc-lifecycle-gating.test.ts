@@ -28,7 +28,11 @@ vi.mock("../src/agent-runner.js", async () => {
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 
-const RPC_CHANNELS = ["subagents:rpc:ping", "subagents:rpc:spawn", "subagents:rpc:stop", "subagents:rpc:pause", "subagents:rpc:resume", "subagents:rpc:consume", "subagents:rpc:steer"] as const;
+const RPC_CHANNELS = [
+  "subagents:rpc:ping", "subagents:rpc:spawn", "subagents:rpc:stop", "subagents:rpc:pause", "subagents:rpc:resume",
+  "subagents:rpc:consume", "subagents:rpc:steer", "subagents:rpc:get", "subagents:rpc:list",
+  "subagents:rpc:workflow_get", "subagents:rpc:workflow_list",
+] as const;
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -236,7 +240,11 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
         (c: any[]) => c[0] === "subagents:rpc:steer:reply:req-steer",
       );
       expect(steerReply![1]).toEqual({ success: true });
-      expect(pi.events.emit).toHaveBeenCalledWith("subagents:steered", { id, message: "also fix the lint" });
+      // Flat payload: the agent shape, with the event's own field beside it.
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "subagents:steered",
+        expect.objectContaining({ id, message: "also fix the lint" }),
+      );
     } finally {
       await lifecycle.get("session_shutdown")();
     }

@@ -157,19 +157,18 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
   }
 
   const manager = new AgentManager((record) => {
-    if (!isTopLevelAgent(record)) {
-      notifyParentOfNestedCompletion(record);
-      return;
-    }
-    const currentCtx = getCurrentCtx();
-    if (currentCtx) syncPauseManifest(currentCtx, park, manager);
+    const topLevel = isTopLevelAgent(record);
+    if (topLevel) {
+      const currentCtx = getCurrentCtx();
+      if (currentCtx) syncPauseManifest(currentCtx, park, manager);
 
-    if (record.status === "paused") {
-      pi.appendEntry<AgentRecordEntryData>(AGENT_RECORD_ENTRY_TYPE, agentRecordEntryData(record));
-      agentActivity.delete(record.id);
-      widget.update();
-      fleet.update();
-      return;
+      if (record.status === "paused") {
+        pi.appendEntry<AgentRecordEntryData>(AGENT_RECORD_ENTRY_TYPE, agentRecordEntryData(record));
+        agentActivity.delete(record.id);
+        widget.update();
+        fleet.update();
+        return;
+      }
     }
 
     const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
@@ -180,6 +179,15 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
       pi.events.emit("subagents:failed", eventData);
     } else {
       pi.events.emit("subagents:completed", eventData);
+    }
+
+    // An owned agent is reported and done: it has no saved record, widget row
+    // or notification of its own. Its parent's completion message is the
+    // separate, top-level-only path — after the event, so a failure delivering
+    // it cannot cost a listener the lifecycle event (#442).
+    if (!topLevel) {
+      notifyParentOfNestedCompletion(record);
+      return;
     }
 
     // Persist the final record: get_subagent_result answers from it once the
@@ -205,25 +213,21 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
     }
     widget.update();
   }, undefined, (record) => {
-    if (!isTopLevelAgent(record)) return;
-    const currentCtx = getCurrentCtx();
-    if (currentCtx?.hasUI) {
-      widget.ensureTimer();
-      widget.update();
-      fleet.ensureTimer();
-      fleet.update();
+    // Every agent announces its run, owned ones included (#442); only a
+    // top-level one has a widget or fleet row to refresh.
+    if (isTopLevelAgent(record)) {
+      const currentCtx = getCurrentCtx();
+      if (currentCtx?.hasUI) {
+        widget.ensureTimer();
+        widget.update();
+        fleet.ensureTimer();
+        fleet.update();
+      }
     }
-    pi.events.emit("subagents:started", {
-      id: record.id,
-      type: record.type,
-      description: record.description,
-    });
+    pi.events.emit("subagents:started", toSubagentInfo(record));
   }, (record, info) => {
-    if (!isTopLevelAgent(record)) return;
     pi.events.emit("subagents:compacted", {
-      id: record.id,
-      type: record.type,
-      description: record.description,
+      ...toSubagentInfo(record),
       reason: info.reason,
       tokensBefore: info.tokensBefore,
       compactionCount: record.compactionCount,
@@ -250,8 +254,7 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
       // ignore
     }
   }, (record, message) => {
-    if (!isTopLevelAgent(record)) return;
-    pi.events.emit("subagents:steered", { id: record.id, message });
+    pi.events.emit("subagents:steered", { ...toSubagentInfo(record), message });
   });
 
   async function startBackgroundResume(
