@@ -217,6 +217,33 @@ describe("AgentManager — pause / unpause", () => {
     expect(manager.unpause(id)).toBe(false);
   });
 
+  it("a failed unpause with a prompt leaves pendingSteers untouched", async () => {
+    manager = new AgentManager();
+    const { id, release } = await spawnHeld({ isBackground: true });
+    manager.pause(id);
+    release(runResult({ aborted: true }));
+    await manager.getRecord(id)!.promise;
+    // A session-bearing record resumes through resume(), so unpause refuses and
+    // the message must not be parked on a run that will never flush it.
+    expect(manager.unpause(id, "steer me")).toBe(false);
+    expect(manager.getRecord(id)!.pendingSteers).toBeUndefined();
+  });
+
+  it("a prompt is dropped, not queued, when the paused record has no queue entry", async () => {
+    manager = new AgentManager(undefined, 1);
+    const a = await spawnHeld({ isBackground: true }, "a");
+    const b = manager.spawn(mockPi, mockCtx, "X", "b", { description: "b", isBackground: true });
+    expect(manager.getRecord(b)!.status).toBe("queued");
+    expect(manager.pause(b)).toBe(true);
+    // A park-only record holds no queue entry for the message to ride, so the
+    // failed unpause must leave the record exactly as it found it.
+    manager.pausedQueued.delete(b);
+    expect(manager.unpause(b, "steer me")).toBe(false);
+    expect(manager.getRecord(b)!.pendingSteers).toBeUndefined();
+    a.release(runResult({ responseText: "a-done" }));
+    await manager.getRecord(a.id)!.promise;
+  });
+
   it("resume after pause completes the same record, sending no continuation prompt", async () => {
     manager = new AgentManager();
     const { id, release } = await spawnHeld({ isBackground: true });

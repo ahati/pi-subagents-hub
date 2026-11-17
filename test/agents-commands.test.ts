@@ -457,4 +457,32 @@ describe("resuming queue-paused agents without a session", () => {
     expect(mentionCtx.ui.notify).toHaveBeenCalledWith(`Queued @${handle}`, "info");
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(spawnCallsBefore);
   });
+
+  it("/continue unpauses a queue-paused agent back to queued", async () => {
+    const b = boot({ maxConcurrent: 1 });
+    await spawnRunning(b, "blocker", "Explore");
+
+    const queuedRes = await b.tools.get("Agent").execute(
+      "tc-queued",
+      { prompt: "queued task", description: "queued task", subagent_type: "general-purpose", run_in_background: true },
+      undefined,
+      undefined,
+      ctx(),
+    );
+    const queuedId = /Agent ID: (\S+)/.exec(textOf(queuedRes))![1];
+    expect(manager().getRecord(queuedId).status).toBe("queued");
+    expect(manager().getRecord(queuedId).session).toBeUndefined();
+
+    runCommand(b, `pause ${queuedId}`);
+    await flush();
+    expect(manager().getRecord(queuedId).status).toBe("paused");
+
+    const contCtx = ctx();
+    await b.commands.get("continue").handler("", contCtx);
+
+    // resumeAgentById routes a queue-parked record through unpause, so it is
+    // back in the queue with its parked entry rather than left paused.
+    expect(manager().getRecord(queuedId).status).toBe("queued");
+    expect(contCtx.ui.notify).toHaveBeenCalledWith("Continued 1 agent.", "info");
+  });
 });

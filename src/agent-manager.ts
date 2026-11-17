@@ -610,7 +610,7 @@ export class AgentManager {
     return {
       registry: this.registry,
       pool: this.pool,
-      unpause: (id: string) => this.unpause(id),
+      unpause: (id: string, prompt?: string) => this.unpause(id, prompt),
       abort: (id: string) => this.abort(id),
       drainQueue: () => this.drainQueue(),
       abortOwnedChildren: (id: string) => this.abortOwnedChildren(id),
@@ -741,11 +741,15 @@ export class AgentManager {
     return true;
   }
 
-  unpause(id: string): boolean {
+  unpause(id: string, prompt?: string): boolean {
     const record = this.registry.agents.get(id);
     if (record?.status !== "paused" || record.session) return false;
     const entry = this.pool.pausedQueued.get(id);
     if (!entry) return false;
+    // The message rides the queue entry: nothing has a session to steer it into
+    // yet, and assigning only after the guard keeps a failed unpause from
+    // mutating the record.
+    if (prompt) record.pendingSteers = [...(record.pendingSteers ?? []), prompt];
     this.pool.pausedQueued.delete(id);
     record.status = "queued";
     record.completedAt = undefined;

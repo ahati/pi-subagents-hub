@@ -23,7 +23,7 @@ import { consumeTerminalResult, waitForRecord } from "./wait-for-record.js";
 export interface ResumeDeps {
   registry: AgentRegistry;
   pool: ConcurrencyPool;
-  unpause: (id: string) => boolean;
+  unpause: (id: string, prompt?: string) => boolean;
   abort: (id: string) => boolean;
   drainQueue: () => void;
   abortOwnedChildren: (id: string) => void;
@@ -144,8 +144,7 @@ export async function resumeRecord(
   if (!record.session) {
     // A record parked before its first run has no transcript to continue. The
     // message the caller sent rides the queue entry instead, so it is not lost.
-    if (prompt) record.pendingSteers = [...(record.pendingSteers ?? []), prompt];
-    if (!unpause(id)) return undefined;
+    if (!unpause(id, prompt)) return undefined;
     if (!options?.isBackground) await waitInline(record, signal, () => abort(id));
     return record;
   }
