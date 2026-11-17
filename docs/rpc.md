@@ -118,6 +118,8 @@ When a background agent finishes, pi-subagents-hub sends the user a completion n
 
 **When you send it decides whether it works.** The timeline:
 
+`subagents:completed` and `subagents:failed` carry `SubagentInfo` (`subagent-info.ts`), the same whitelist the `get`/`list` snapshots use — including `sessionFile`, `structuredJson` and the split `ownUsage`, so a listener no longer needs the registry to read those.
+
 1. The agent settles, and the manager's completion callback in `src/index.ts` emits `subagents:completed`.
 2. Next, in the same synchronous callback, it checks `record.resultConsumed` and decides whether to notify at all.
 3. `pi.events` dispatch is synchronous and in-process, so a handler that emits `subagents:rpc:consume` **without awaiting anything** has already set that flag before step 2 evaluates.

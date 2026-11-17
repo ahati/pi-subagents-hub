@@ -62,6 +62,57 @@ function ctx() {
 
 const textOf = (r: any): string => r.content[0].text;
 
+describe("the completion event's shape", () => {
+  afterEach(() => {
+    delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    vi.restoreAllMocks();
+  });
+
+  it("carries the whole agent shape: session file, structured payload and own usage", async () => {
+    const session = {
+      dispose: vi.fn(),
+      sessionManager: { getSessionFile: () => "/sessions/a1.jsonl" },
+    };
+    vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
+      opts.onSessionCreated?.(session);
+      opts.onAssistantUsage?.({ input: 10, output: 5, cacheWrite: 0, cost: 0.001 });
+      return {
+        responseText: "done",
+        session,
+        aborted: false,
+        steered: false,
+        structuredJson: '{"verdict":"PASS"}',
+      };
+    });
+
+    const { pi, tools } = makePi();
+    subagentsExtension(pi);
+    await tools.get("Agent").execute(
+      "tc-shape",
+      { prompt: "go", description: "d", subagent_type: "general-purpose", run_in_background: true },
+      undefined,
+      undefined,
+      ctx(),
+    );
+
+    const completed = pi.events.emit.mock.calls.find((call: any[]) => call[0] === "subagents:completed")?.[1];
+    expect(completed).toMatchObject({
+      id: expect.any(String),
+      depth: 1,
+      startedAt: expect.any(Number),
+      toolUses: expect.any(Number),
+      result: "done",
+      // The three fields a bus caller used to have to read the record for:
+      sessionFile: "/sessions/a1.jsonl",
+      structuredJson: '{"verdict":"PASS"}',
+      ownUsage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.001 } },
+    });
+    // The whitelist, not the record: nothing internal leaks.
+    expect(completed).not.toHaveProperty("outputFile");
+    expect(completed).not.toHaveProperty("abortController");
+  });
+});
+
 describe("status note reaches the parent through the real handlers", () => {
   afterEach(() => {
     delete (globalThis as any)[Symbol.for("pi-subagents:manager")];

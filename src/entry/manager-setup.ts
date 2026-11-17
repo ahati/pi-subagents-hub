@@ -11,6 +11,7 @@ import { createOutputFilePath, ensureOutputFile, streamToOutputFile } from "../o
 import type { AgentRecord, JoinMode } from "../types.js";
 import type { AgentActivity, AgentWidget } from "../ui/agent-widget.js";
 import type { FleetList } from "../ui/fleet-list.js";
+import { toSubagentInfo } from "../subagent-info.js";
 import { getLifetimeTotal, type PendingUsagePool, toReportedUsage } from "../usage.js";
 import { buildNotificationDetails, createActivityTracker, formatTaskNotification } from "./renderers.js";
 
@@ -30,27 +31,6 @@ export interface ManagerSetupDeps {
   joinTurnGroup: (id: string, joinMode: JoinMode | undefined) => void;
 }
 
-export function buildEventData(record: AgentRecord) {
-  const durationMs = record.completedAt ? record.completedAt - record.startedAt : Date.now() - record.startedAt;
-  const u = record.lifetimeUsage;
-  const total = getLifetimeTotal(u);
-  const tokens = total > 0
-    ? { input: u.input, output: u.output, total }
-    : undefined;
-  const usage = toReportedUsage(u);
-  return {
-    id: record.id,
-    type: record.type,
-    description: record.description,
-    result: record.result,
-    error: record.error,
-    status: record.status,
-    toolUses: record.toolUses,
-    durationMs,
-    tokens,
-    usage,
-  };
-}
 
 export function createManagerSetup(deps: ManagerSetupDeps) {
   const {
@@ -193,7 +173,9 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
     }
 
     const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
-    const eventData = buildEventData(record);
+    // One shape for every listener: the whitelist in subagent-info.ts, not
+    // whatever AgentRecord happens to hold.
+    const eventData = toSubagentInfo(record);
     if (isError) {
       pi.events.emit("subagents:failed", eventData);
     } else {
