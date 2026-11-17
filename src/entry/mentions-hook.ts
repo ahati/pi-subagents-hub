@@ -114,10 +114,19 @@ export function registerMentionInputHook(pi: ExtensionAPI, deps: MentionHookDeps
 
       if (isResumable(record)) {
         const wasPaused = record.status === "paused";
-        const resumedRecord = await startBackgroundResume(ctx, record, mention.message, {
-          outputTranscript: getAgentConfig(record.type)?.outputTranscript ?? getOutputTranscriptDefault(),
-          maxTurns: resumeTurnLimit(record),
-        });
+        let resumedRecord: AgentRecord | undefined;
+        try {
+          resumedRecord = await startBackgroundResume(ctx, record, mention.message, {
+            outputTranscript: getAgentConfig(record.type)?.outputTranscript ?? getOutputTranscriptDefault(),
+            maxTurns: resumeTurnLimit(record),
+          });
+        } catch (err) {
+          // A paused record with no live queue entry cannot be resumed here; the
+          // manager explains why, and `/continue` is the surface that re-runs it
+          // from its saved prompt.
+          ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
+          return { action: "handled" };
+        }
         if (resumedRecord && wasPaused) await resumePausedChildren(ctx, record, pauseDeps);
         const queued = resumedRecord?.status === "queued";
         ctx.ui.notify(

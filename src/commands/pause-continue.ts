@@ -114,9 +114,17 @@ export async function resumeAgentById(
   deps: PauseContinueDeps,
   prompt?: string,
 ): Promise<boolean> {
-  const resumed = isResumable(record)
-    ? await resumeAgentSession(ctx, record, deps.startBackgroundResume, prompt)
-    : deps.manager.unpause(record.id);
+  let resumed: boolean;
+  try {
+    resumed = isResumable(record)
+      ? await resumeAgentSession(ctx, record, deps.startBackgroundResume, prompt)
+      : deps.manager.unpause(record.id);
+  } catch (err) {
+    // The manager refuses a paused record with no live queue entry, with the
+    // reason; `/continue` re-runs that one from its saved prompt instead.
+    notifySafely(ctx, err instanceof Error ? err.message : String(err), "warning");
+    return false;
+  }
   if (resumed) {
     if (isTopLevelAgent(record)) {
       deps.pi.events.emit("subagents:resumed", {

@@ -136,24 +136,48 @@ export async function resumeRecord(
     return record;
   }
 
-  const bare = record.status === "paused";
-  if (!bare && (record.status === "running" || record.status === "queued")) {
+  // Every other pause is decided by where the record is parked, not by whether
+  // it has a session. A record parked after a pool-blocked resume has both a
+  // session and a queue entry; `session` alone cannot tell it from a gate-parked
+  // one, and treating it as a transcript continuation drops the caller's prompt
+  // and leaves the stale entry behind.
+  if (record.status === "paused") {
+    const parked = pool.pausedQueued.has(id);
+    if (!parked && !record.session) {
+      // Nothing to continue and nothing to unpark. `/continue` re-runs a record
+      // like this from its saved prompt; a live resume has nothing to reach.
+      throw new Error(
+        `Agent "${id}" is paused with no live queue entry — /continue re-runs it from its saved prompt.`
+      );
+    }
+    if (parked && !record.session) {
+      // Parked before its first run: nothing has a session to steer the message
+      // into, so it rides the queue entry that unpause puts back.
+      if (!unpause(id, prompt)) return undefined;
+      if (!options?.isBackground) await waitInline(record, signal, () => abort(id));
+      return record;
+    }
+    if (parked) {
+      // Session-backed and queued behind the pool, then paused. That entry's
+      // `start` is the earlier resume with the earlier prompt; drop it and let
+      // this call issue its own, which carries this prompt.
+      pool.pausedQueued.delete(id);
+    }
+  } else if (record.status === "running" || record.status === "queued") {
     if (options?.isBackground) return undefined;
     throw new Error(`Agent "${record.id}" is still ${record.status}. Wait for it to finish or steer it.`);
   }
+
   if (!record.session) {
-    // A record parked before its first run has no transcript to continue. The
-    // message the caller sent rides the queue entry instead, so it is not lost.
-    if (!unpause(id, prompt)) return undefined;
-    if (!options?.isBackground) await waitInline(record, signal, () => abort(id));
-    return record;
+    // Terminal record that never got a session (stopped before it started, an
+    // evicted child): there is no transcript to continue. The callers that can
+    // reopen one from disk do that on `undefined`.
+    return undefined;
   }
 
-  const effectivePrompt = bare ? undefined : prompt;
+  const effectivePrompt = prompt;
 
   if (options?.isBackground) {
-    if (record.status === "running" || record.status === "queued") return undefined;
-
     record.isBackground = true;
     record.resultConsumed = false;
     record.result = undefined;

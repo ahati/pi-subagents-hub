@@ -229,6 +229,60 @@ describe("AgentManager — pause / unpause", () => {
     expect(manager.getRecord(id)!.pendingSteers).toBeUndefined();
   });
 
+  it("resumes a session-backed record parked behind the pool, with this call's prompt", async () => {
+    manager = new AgentManager(undefined, 1);
+
+    // A settled, session-backed record.
+    const first = await spawnHeld({ isBackground: true }, "first run");
+    first.release(runResult({ responseText: "first answer" }));
+    await manager.getRecord(first.id)!.promise;
+    const session = manager.getRecord(first.id)!.session;
+    expect(session).toBeDefined();
+
+    // Fill the pool, then resume it in the background: it is queued behind the
+    // pool, and the entry's `start` is that resume.
+    const blocker = await spawnHeld({ isBackground: true }, "blocker");
+    vi.mocked(resumeAgent).mockResolvedValue({ text: "resumed" } as any);
+    await manager.resume(first.id, "resume prompt", undefined, { isBackground: true });
+    expect(manager.getRecord(first.id)!.status).toBe("queued");
+
+    // Pause it there: the entry moves to `pausedQueued`, the session stays.
+    expect(manager.pause(first.id)).toBe(true);
+    const pool = (manager as any).pool;
+    expect(pool.pausedQueued.has(first.id)).toBe(true);
+
+    // Send the message to resume it, not to the run it was started with.
+    await manager.resume(first.id, "second prompt", undefined, { isBackground: true });
+
+    // No stale entry, and one queue entry — not two.
+    expect(pool.pausedQueued.has(first.id)).toBe(false);
+    expect(pool.queue.filter((entry: any) => entry.id === first.id)).toHaveLength(1);
+
+    blocker.release(runResult({ responseText: "blocker done" }));
+    await manager.getRecord(blocker.id)!.promise;
+    await manager.waitForAll();
+
+    // The resume that ran carries *this* call's prompt, not the parked one.
+    expect(vi.mocked(resumeAgent)).toHaveBeenCalledWith(session, "second prompt", expect.anything());
+  });
+
+  it("refuses a paused record whose queue entry is gone, and says why", async () => {
+    manager = new AgentManager(undefined, 1);
+    const blocker = await spawnHeld({ isBackground: true }, "blocker");
+    // A record that never started: queued, no session.
+    const id = manager.spawn(mockPi, mockCtx, "X", "never ran", { description: "queued", isBackground: true });
+    expect(manager.getRecord(id)!.status).toBe("queued");
+    expect(manager.pause(id)).toBe(true);
+    // Simulate a lost entry (a restart-manifest record, or a race that consumed
+    // it): nothing is left to unpark and there is no transcript either.
+    (manager as any).pool.pausedQueued.delete(id);
+
+    await expect(manager.resume(id)).rejects.toThrow(/no live queue entry/);
+    // The refusal changed nothing.
+    expect(manager.getRecord(id)!.status).toBe("paused");
+    blocker.release(runResult({ responseText: "blocker done" }));
+  });
+
   it("a prompt is dropped, not queued, when the paused record has no queue entry", async () => {
     manager = new AgentManager(undefined, 1);
     const a = await spawnHeld({ isBackground: true }, "a");
