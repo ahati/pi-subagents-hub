@@ -9,6 +9,9 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+> **⚠️ Behavior change — the `subagents:rpc:stop` reply can arrive up to 5 s later** ([#443](https://github.com/tintinweb/pi-subagents/issues/443)). It now waits until the stopped agent and every agent below it have finished, and returns `{ settled }`. A caller whose stop timeout is under 5 s should raise it, or pass a smaller `settleTimeoutMs`.
+
+
 > **⚠️ Behavior change — lifecycle events now cover nested and workflow agents** ([#442](https://github.com/tintinweb/pi-subagents/issues/442)). `subagents:started`, `:completed`, `:failed`, `:steered` and `:compacted` used to be emitted for the session's own agents only. Nested subagents and a workflow's children now emit them too, with `parentAgentId` or `workflowId` set and `depth` saying how deep. To keep the old view, ignore events where either field is set.
 
 
@@ -47,6 +50,8 @@ check the entries below for behaviour changes.
 - **A reopened agent keeps the model and thinking level it last ran with.** `Agent({ resume })`, an `@handle` after eviction, `/continue` and a workflow's `resume` now restore the saved selection instead of falling back to the parent session's model; the agent type's current pin is the fallback when the saved session records neither. Tools, system prompt and turn caps still follow the type's current definition. ([#13](https://github.com/ahati/pi-subagents-hub/pull/13) — thanks [@KuljeetSinghXDA](https://github.com/KuljeetSinghXDA))
 
 - **Completion events carry the whole agent shape.** `subagents:completed` and `:failed` now send the same `SubagentInfo` the `get`/`list` snapshots return, so a listener no longer needs the private registry to read `sessionFile`, `structuredJson` or `ownUsage` — and `depth`, `parentAgentId` and `workflowId` say where in a tree the agent sits. Existing fields are unchanged; nothing internal is added. ([tintinweb/pi-subagents#415](https://github.com/tintinweb/pi-subagents/issues/415) — thanks [@BenedictP](https://github.com/BenedictP))
+
+- **`subagents:rpc:stop` replies only once the stopped agent and every agent below it have finished.** A nested agent's tool call that ignored the abort could finish after the reply and overwrite the caller's replacement work. The reply now waits up to 5 s (or `settleTimeoutMs`, max 60 s) and returns `{ settled }`; after `settled: false`, `get` shows the agent as `settling` and a repeat stop waits again. ([tintinweb/pi-subagents#443](https://github.com/tintinweb/pi-subagents/issues/443) — thanks [@VolodymyrMachekhin](https://github.com/VolodymyrMachekhin))
 
 ### Fixed
 

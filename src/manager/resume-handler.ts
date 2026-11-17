@@ -24,6 +24,8 @@ export interface ResumeDeps {
   registry: AgentRegistry;
   pool: ConcurrencyPool;
   unpause: (id: string, prompt?: string) => boolean;
+  /** Remember a run's promise until it settles, for waitForSettled. */
+  trackRun?: (promise: Promise<unknown>) => void;
   abort: (id: string) => boolean;
   drainQueue: () => void;
   abortOwnedChildren: (id: string) => void;
@@ -266,6 +268,7 @@ export async function resumeRecord(
     return record.result ?? "";
   })();
   record.promise = promise;
+  deps.trackRun?.(promise);
   await promise;
   consumeTerminalResult(record);
   return record;
@@ -367,4 +370,5 @@ export function startResume(
     });
 
   record.promise = promise;
+  deps.trackRun?.(promise);
 }

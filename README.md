@@ -955,7 +955,7 @@ pi.events.emit("subagents:rpc:ping", { requestId });
 
 ### Snapshots
 
-A listener that loaded after the events it needed had already fired can read state instead of waiting for the next event. `subagents:rpc:get` (`{ requestId, agentId }`) returns `{ agent }` and `subagents:rpc:list` returns `{ agents }`, each an array of the same shape the completion events carry — plus `notificationPending`, set while a finished agent's completion is still waiting for the parent's next turn. Nested and workflow-owned agents are included, with `parentAgentId` / `workflowId` set; the caller filters. A record stays readable for the ten minutes the manager keeps it after it settles.
+A listener that loaded after the events it needed had already fired can read state instead of waiting for the next event. `subagents:rpc:get` (`{ requestId, agentId }`) returns `{ agent }` and `subagents:rpc:list` returns `{ agents }`, each an array of the same shape the completion events carry — plus `notificationPending`, set while a finished agent's completion is still waiting for the parent's next turn, and `settling` on a terminal agent whose tree still has a run in flight. Nested and workflow-owned agents are included, with `parentAgentId` / `workflowId` set; the caller filters. A record stays readable for the ten minutes the manager keeps it after it settles.
 
 `capabilities` is derived from the handlers this build installs, so it cannot drift from what the extension actually answers. It lists channels, not behaviour: it does not say whether `scopeModels` is enforced or worktree isolation is enabled, so error envelopes stay authoritative. A reply with no `capabilities` field comes from a build that predates it — read it as version 2 alone (`ping`, `spawn`, `stop`) and keep the send-and-timeout fallback for the rest.
 
@@ -999,6 +999,8 @@ const unsub = pi.events.on(`subagents:rpc:stop:reply:${requestId}`, (reply) => {
 });
 pi.events.emit("subagents:rpc:stop", { requestId, agentId: "agent-id-here" });
 ```
+
+The reply waits until the agent **and every agent it owns** have no run in flight — a stopped agent's tool call that ignored the abort can still land — and returns `{ settled }`. It gives up after 5 s by default; pass `settleTimeoutMs` (max 60 s) to change that. `settled: false` means the bound passed before the tree finished: `subagents:rpc:get` reports that agent as `settling`, and a later stop waits again.
 
 ### Pause and resume
 

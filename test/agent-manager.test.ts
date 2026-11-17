@@ -3411,3 +3411,57 @@ describe("AgentManager — abort during worktree setup", () => {
     expect(manager.getRecord(id)).toBe(record);
   });
 });
+
+describe("AgentManager — settling a stopped run", () => {
+  it("reports a stopped run as settling until its tool call lands", async () => {
+    const manager = new AgentManager();
+    let release!: (value: any) => void;
+    vi.mocked(runAgent).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }) as any);
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "go", { description: "d", isBackground: true });
+    await manager.awaitStartup(id);
+    expect(manager.isSettling(id)).toBe(true);
+
+    // The stop lands at once; the run behind it is still unwinding.
+    expect(manager.abort(id)).toBe(true);
+    expect(manager.getRecord(id)!.status).toBe("stopped");
+    expect(manager.isSettling(id)).toBe(true);
+
+    const settled = manager.waitForSettled(id, 1_000);
+    release({ responseText: "late", session: mockSession(), aborted: true, steered: false });
+    await expect(settled).resolves.toBe(true);
+    expect(manager.isSettling(id)).toBe(false);
+    await manager.dispose();
+  });
+
+  it("waits for a descendant's run too, and gives up at the bound", async () => {
+    const manager = new AgentManager();
+    let releaseParent!: (value: any) => void;
+    let releaseChild!: (value: any) => void;
+    vi.mocked(runAgent)
+      .mockImplementationOnce(() => new Promise(resolve => { releaseParent = resolve; }) as any)
+      .mockImplementationOnce(() => new Promise(resolve => { releaseChild = resolve; }) as any);
+
+    const parent = manager.spawn(mockPi, mockCtx, "general-purpose", "parent", { description: "p", isBackground: true });
+    await manager.awaitStartup(parent);
+    const child = manager.spawn(mockPi, mockCtx, "general-purpose", "child", {
+      description: "c",
+      isBackground: true,
+      parentAgentId: parent,
+      depth: 2,
+    });
+    await manager.awaitStartup(child);
+
+    // The parent's own run has not settled either, so nothing is settled yet.
+    await expect(manager.waitForSettled(parent, 30)).resolves.toBe(false);
+    releaseParent({ responseText: "p", session: mockSession(), aborted: false, steered: false });
+    await manager.getRecord(parent)!.promise;
+    // The parent is done; the child it owns is not.
+    expect(manager.isSettling(parent)).toBe(true);
+
+    const settled = manager.waitForSettled(parent, 1_000);
+    releaseChild({ responseText: "c", session: mockSession(), aborted: false, steered: false });
+    await expect(settled).resolves.toBe(true);
+    expect(manager.isSettling(parent)).toBe(false);
+    await manager.dispose();
+  });
+});

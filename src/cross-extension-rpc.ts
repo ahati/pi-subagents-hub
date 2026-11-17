@@ -18,8 +18,8 @@ import { isTopLevelAgent } from "./agent-manager.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
 import { type SubagentInfo, toSubagentInfo } from "./subagent-info.js";
-import type { WorkflowDetail, WorkflowInfo } from "./workflow-info.js";
 import type { AgentRecord } from "./types.js";
+import type { WorkflowDetail, WorkflowInfo } from "./workflow-info.js";
 
 /** Minimal event bus interface needed by the RPC handlers. */
 export interface EventBus {
@@ -50,6 +50,16 @@ export type RpcCapability =
 export const PROTOCOL_VERSION = 2;
 
 /**
+ * How long `subagents:rpc:stop` waits for the stopped agent and the agents it
+ * owns to settle before replying `{ settled: false }`. Below the 10 s pi-tasks
+ * gives the stop reply, so a slow settle never reads to it as a failed stop.
+ */
+export const STOP_SETTLE_TIMEOUT_MS = 5_000;
+
+/** The largest `settleTimeoutMs` a `subagents:rpc:stop` caller can ask for. */
+export const STOP_SETTLE_TIMEOUT_MAX_MS = 60_000;
+
+/**
  * What this build supports, on the `ping` reply.
  *
  * The envelope and spawn contract are still `PROTOCOL_VERSION` 2; these name the
@@ -61,6 +71,7 @@ export const PROTOCOL_VERSION = 2;
 export const FEATURES = [
   "get", "list", "notification-pending",
   "workflow-events", "workflow-get", "workflow-list",
+  "stop-settles", "settling",
 ] as const;
 
 /** Minimal AgentManager interface needed by the spawn/stop/consume/pause/resume RPCs. */
@@ -69,6 +80,17 @@ export interface SpawnCapable {
   /** Resolves once the spawned agent is running; rejects on a startup failure. */
   awaitStartup(id: string): Promise<void>;
   abort(id: string): boolean;
+  /**
+   * Resolves true once the agent's run and every owned descendant's run have
+   * settled, false if `timeoutMs` passes first.
+   */
+  waitForSettled(id: string, timeoutMs: number): Promise<boolean>;
+  /**
+   * Whether the agent or an agent it owns is still running, whatever its status
+   * says — a stopped agent whose tool call ignored the abort reads true until
+   * that call ends.
+   */
+  isSettling(id: string): boolean;
   /**
    * Pause an active agent: interrupt its run (or dequeue it) while keeping the
    * record and session for a later resume. False when the agent cannot be
@@ -272,13 +294,23 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
     if (!isTopLevelAgent(record)) throw new Error("Agent is owned by another agent or workflow");
   };
 
-  const unsubStop = wire<{ requestId: string; agentId: string }>(
-    "stop", ({ agentId }) => {
+  const unsubStop = wire<{ requestId: string; agentId: string; settleTimeoutMs?: unknown }>(
+    "stop", async ({ agentId, settleTimeoutMs }) => {
+      if (settleTimeoutMs !== undefined && (typeof settleTimeoutMs !== "number" || !Number.isFinite(settleTimeoutMs))) {
+        throw new Error("settleTimeoutMs must be a number of milliseconds");
+      }
+      const timeoutMs = Math.min(Math.max(settleTimeoutMs ?? STOP_SETTLE_TIMEOUT_MS, 0), STOP_SETTLE_TIMEOUT_MAX_MS);
       assertOwned(agentId);
-      // Not "not found" — the lookup above already proved it exists. `abort`
-      // returns false only for a record that is neither running nor queued,
-      // which is an agent that has already finished.
-      if (!manager.abort(agentId)) throw new Error("Agent is not running");
+      // `abort` returns false for a record that is neither running nor queued.
+      // If its tree is still settling, this is a repeat stop after
+      // `settled: false`, and it waits again. Otherwise the agent has finished:
+      // not "not found", since the lookup above proved it exists.
+      if (!manager.abort(agentId) && !manager.isSettling(agentId)) throw new Error("Agent is not running");
+      // Stop means stopped: the reply waits until no tool call of this agent or
+      // of any agent it owns can still land (#443). A caller that does not care
+      // need not await it. `settled: false` says the bound passed first and
+      // something may still be running; `get` then shows `settling`.
+      return { settled: await manager.waitForSettled(agentId, timeoutMs) };
     },
   );
 
@@ -337,10 +369,15 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
   // notification starts a parent turn right after it concluded none would
   // (#103). Not on the events: `completed` fires before the notification is
   // queued, so there it would always read false.
-  const snapshot = (record: AgentRecord) => ({
-    ...toSubagentInfo(record),
-    ...(manager.isNotificationPending(record.id) ? { notificationPending: true } : {}),
-  });
+  const snapshot = (record: AgentRecord) => {
+    const terminal = record.status !== "running" && record.status !== "queued";
+    return {
+      ...toSubagentInfo(record),
+      // Only meaningful on a terminal record: while it runs, its status says so.
+      ...(terminal && manager.isSettling(record.id) ? { settling: true } : {}),
+      ...(manager.isNotificationPending(record.id) ? { notificationPending: true } : {}),
+    };
+  };
 
   const unsubGet = wire<{ requestId: string; agentId: string }>(
     "get", ({ agentId }) => {

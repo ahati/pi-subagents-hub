@@ -66,6 +66,14 @@ export class AgentManager {
   private onUsage?: OnAgentUsage;
   private onSteered?: OnAgentSteered;
   private startups = new Map<string, Promise<void>>();
+  /**
+   * Runs whose promise has not settled yet, whatever their status says.
+   *
+   * `record.status` goes terminal the moment a stop is requested; a tool call
+   * that ignored the abort can still land afterwards. This is the only honest
+   * answer to "is anything still running under this agent".
+   */
+  private unsettled = new Set<Promise<unknown>>();
   private maxConcurrentNested = DEFAULT_MAX_CONCURRENT_NESTED;
 
   get runningBackground(): number {
@@ -490,6 +498,7 @@ export class AgentManager {
       });
 
     record.promise = promise;
+    this.trackRun(promise);
     try { options.onSpawned?.(id); } catch (err) {
       console.error("[pi-subagents-hub] spawned callback failed:", err);
     }
@@ -522,7 +531,70 @@ export class AgentManager {
     }
   }
 
+  /** Remember a run's promise until it settles. */
+  private trackRun(promise: Promise<unknown>): void {
+    this.unsettled.add(promise);
+    // `finally` returns a new promise, which rejects when the original did.
+    void promise.finally(() => this.unsettled.delete(promise)).catch(() => {});
+  }
+
+  /** The record and every agent below it, at any depth. */
+  private subtree(id: string): AgentRecord[] {
+    const out: AgentRecord[] = [];
+    const seen = new Set<string>();
+    const queue = [id];
+    while (queue.length > 0) {
+      const next = queue.shift()!;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      const record = this.registry.agents.get(next);
+      if (!record) continue;
+      out.push(record);
+      for (const child of this.registry.agents.values()) {
+        if (child.parentAgentId === next) queue.push(child.id);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Whether the agent or an agent it owns still has a run in flight — a stopped
+   * agent whose tool call ignored the abort reads true until that call ends.
+   */
+  isSettling(id: string): boolean {
+    return this.subtree(id).some(record => record.promise !== undefined && this.unsettled.has(record.promise));
+  }
+
+  /**
+   * Resolve true once the agent and every agent below it have no run in flight,
+   * or false when `timeoutMs` passes first.
+   */
+  async waitForSettled(id: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const pending = this.subtree(id)
+        .map(record => record.promise)
+        .filter((promise): promise is Promise<string> => promise !== undefined && this.unsettled.has(promise));
+      if (pending.length === 0) return true;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.allSettled(pending),
+          new Promise<void>(resolve => { timer = setTimeout(resolve, remaining); }),
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+  }
+
   private settleRun(record: AgentRecord): void {
+    // Settled here, at the moment the run is done: the promise that carries it
+    // resolves a microtask later, and a stop that reads it in between would
+    // report a finished run as still settling.
+    if (record.promise !== undefined) this.unsettled.delete(record.promise);
     releaseGate(record);
     if (!record.isBackground) record.resultConsumed = true;
     record.blocking = false;
@@ -611,6 +683,7 @@ export class AgentManager {
       registry: this.registry,
       pool: this.pool,
       unpause: (id: string, prompt?: string) => this.unpause(id, prompt),
+      trackRun: (promise: Promise<unknown>) => this.trackRun(promise),
       abort: (id: string) => this.abort(id),
       drainQueue: () => this.drainQueue(),
       abortOwnedChildren: (id: string) => this.abortOwnedChildren(id),

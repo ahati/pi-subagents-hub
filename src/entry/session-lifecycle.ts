@@ -8,7 +8,6 @@ import type { AgentManager } from "../agent-manager.js";
 import type { ParkGateController } from "../commands/pause-state.js";
 import type { CompletionOutbox } from "../completion-outbox.js";
 import { type RpcHandle, registerRpcHandlers } from "../cross-extension-rpc.js";
-import { toWorkflowDetail, toWorkflowInfo } from "../workflow-info.js";
 import type { GroupJoinManager } from "../group-join.js";
 import { invalidatePackageCache, setProjectTrusted } from "../package-resources.js";
 import {
@@ -24,6 +23,7 @@ import type { AgentWidget, UICtx } from "../ui/agent-widget.js";
 import type { ViewerBackgroundAction } from "../ui/conversation-viewer.js";
 import type { FleetList, FleetUICtx } from "../ui/fleet-list.js";
 import type { WorkflowTask } from "../workflow/task.js";
+import { toWorkflowDetail, toWorkflowInfo } from "../workflow-info.js";
 
 const MANAGER_KEY = Symbol.for("pi-subagents:manager");
 
@@ -223,6 +223,8 @@ export function registerSessionLifecycle(
           // group, so "settled" and "reported" are different states (#103).
           isNotificationPending: (id) => outbox.has(id) || groupJoin.isHolding(id),
           abort: (id) => manager.abort(id),
+          waitForSettled: (id, timeoutMs) => manager.waitForSettled(id, timeoutMs),
+          isSettling: (id) => manager.isSettling(id),
           pauseAgent: (id) => {
             const record = manager.getRecord(id);
             return record !== undefined && pauseAgentAndSync(getCurrentCtx(), record) === undefined;

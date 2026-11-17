@@ -15,7 +15,6 @@ import { renderWorkflowCard } from "../ui/workflow-card.js";
 import { decideWorkflowCollision } from "../workflow/collisions.js";
 import { WORKFLOW_ENTRY_TYPE, type WorkflowEntryData, workflowEntryData } from "../workflow/entry.js";
 import { createWorkflowHost } from "../workflow/host.js";
-import { toWorkflowInfo } from "../workflow-info.js";
 import { appendJournal, readJournal, type WorkflowJournalEntry } from "../workflow/journal.js";
 import { extractMeta, type WorkflowMeta, workflowCallName } from "../workflow/meta.js";
 import { elapsedMs } from "../workflow/progress.js";
@@ -33,6 +32,7 @@ import {
   workflowRunId,
 } from "../workflow/task.js";
 import { workflowToolDescription } from "../workflow/tool-description.js";
+import { toWorkflowInfo } from "../workflow-info.js";
 import { buildCompactTypeListText, buildTypeListText } from "./agent-tool-schema.js";
 
 export interface WorkflowToolDeps {

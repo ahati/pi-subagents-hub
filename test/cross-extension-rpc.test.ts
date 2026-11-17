@@ -76,6 +76,8 @@ describe("cross-extension RPC", () => {
       resumeAgent: vi.fn().mockResolvedValue(true),
       getRecord: vi.fn().mockReturnValue({}),
       listAgents: vi.fn().mockReturnValue([record()]),
+      waitForSettled: vi.fn().mockResolvedValue(true),
+      isSettling: vi.fn().mockReturnValue(false),
       isNotificationPending: vi.fn().mockReturnValue(false),
       consumeResult: vi.fn().mockReturnValue(true),
       steer: vi.fn().mockResolvedValue(true),
@@ -102,7 +104,12 @@ describe("cross-extension RPC", () => {
       expect(data.version).toBe(PROTOCOL_VERSION);
       // Sorted: the wire order is incidental, the set is the contract.
       expect([...data.capabilities].sort()).toEqual(EXPECTED_CAPABILITIES);
-      expect(data.features).toEqual(expect.arrayContaining(["get", "list", "notification-pending"]));
+      expect(data.features).toEqual(
+        expect.arrayContaining([
+          "get", "list", "notification-pending", "workflow-events", "workflow-get", "workflow-list",
+          "stop-settles", "settling",
+        ]),
+      );
     });
 
     it("advertises nothing it cannot answer — every capability has a live handler", async () => {
@@ -327,8 +334,9 @@ describe("cross-extension RPC", () => {
       events.emit("subagents:rpc:stop", { requestId: "req-st1", agentId: "agent-42" });
 
       await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-      expect(reply).toHaveBeenCalledWith({ success: true });
+      expect(reply).toHaveBeenCalledWith({ success: true, data: { settled: true } });
       expect(manager.abort).toHaveBeenCalledWith("agent-42");
+      expect(manager.waitForSettled).toHaveBeenCalledWith("agent-42", 5_000);
     });
 
     // `abort` returning false no longer means "no such agent" — the handler's
@@ -343,6 +351,20 @@ describe("cross-extension RPC", () => {
 
       await vi.waitFor(() => expect(reply).toHaveBeenCalled());
       expect(reply).toHaveBeenCalledWith({ success: false, error: "Agent is not running" });
+    });
+
+    it("waits again on a repeat stop while the tree is still settling", async () => {
+      (manager.abort as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      (manager.isSettling as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      registerRpcHandlers(deps);
+      const reply = vi.fn();
+      events.on("subagents:rpc:stop:reply:req-st10", reply);
+      events.emit("subagents:rpc:stop", { requestId: "req-st10", agentId: "agent-42" });
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      expect(reply).toHaveBeenCalledWith({ success: true, data: { settled: true } });
+      expect(manager.abort).toHaveBeenCalledWith("agent-42");
+      expect(manager.waitForSettled).toHaveBeenCalled();
     });
 
     it("returns error when the agent is unknown to the manager", async () => {

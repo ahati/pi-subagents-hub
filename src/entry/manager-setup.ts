@@ -8,10 +8,10 @@ import { GroupJoinManager } from "../group-join.js";
 import { resolveJoinMode } from "../invocation-config.js";
 import { gateOf } from "../manager/manager-types.js";
 import { createOutputFilePath, ensureOutputFile, streamToOutputFile } from "../output-file.js";
+import { toSubagentInfo } from "../subagent-info.js";
 import type { AgentRecord, JoinMode } from "../types.js";
 import type { AgentActivity, AgentWidget } from "../ui/agent-widget.js";
 import type { FleetList } from "../ui/fleet-list.js";
-import { toSubagentInfo } from "../subagent-info.js";
 import { getLifetimeTotal, type PendingUsagePool, toReportedUsage } from "../usage.js";
 import { buildNotificationDetails, createActivityTracker, formatTaskNotification } from "./renderers.js";
 

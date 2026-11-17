@@ -1,6 +1,6 @@
 # Driving subagents from another extension
 
-Another pi extension can spawn a subagent, listen for subagent completion, read the result, steer or stop the run, or pause it and pick it up later — all over the `pi.events` bus, without importing this package directly. Nine request/reply channels (`subagents:rpc:ping`, `subagents:rpc:spawn`, `subagents:rpc:stop`, `subagents:rpc:pause`, `subagents:rpc:resume`, `subagents:rpc:consume`, `subagents:rpc:steer`, `subagents:rpc:get`, `subagents:rpc:list`, `subagents:rpc:workflow_get`, `subagents:rpc:workflow_list`), thirteen lifecycle events, a per-message usage event (`subagents:usage`), one terminal `subagents:disposed`, and one in-process registry at `Symbol.for("pi-subagents:manager")`.
+Another pi extension can spawn a subagent, listen for subagent completion, read the result, steer or stop the run, or pause it and pick it up later — all over the `pi.events` bus, without importing this package directly. Eleven request/reply channels (`subagents:rpc:ping`, `subagents:rpc:spawn`, `subagents:rpc:stop`, `subagents:rpc:pause`, `subagents:rpc:resume`, `subagents:rpc:consume`, `subagents:rpc:steer`, `subagents:rpc:get`, `subagents:rpc:list`, `subagents:rpc:workflow_get`, `subagents:rpc:workflow_list`), thirteen lifecycle events, a per-message usage event (`subagents:usage`), one terminal `subagents:disposed`, and one in-process registry at `Symbol.for("pi-subagents:manager")`.
 
 The thing worth understanding up front is that **the bus is in-process.** Every "RPC" call here is a synchronous `pi.events.emit` into the same event loop, and every reply comes back the same way. That single fact explains most of what follows: why `signal` and the `on*` callbacks work on a spawn payload at all, why a `consume` fired inside a `subagents:completed` handler lands *before* the notification decision has been made, and why none of this survives a real process boundary.
 
@@ -165,9 +165,15 @@ Prefer the bus. The registry has no reply envelope, no version, and no availabil
 
 `features` names the additions that are not request channels — a changed reply or event — so a caller can detect them without a version bump: `get`, `list`, `notification-pending`. Append-only; a build without the array predates all of them.
 
+## Stop settles
+
+`subagents:rpc:stop` (`{ requestId, agentId, settleTimeoutMs? }`) aborts the agent and then waits until it **and every agent it owns** have no run in flight, replying `{ settled }`. A tool call that ignored the abort can still land, and a nested child may outlive its parent's stop, so "aborted" is not "stopped". The default bound is `STOP_SETTLE_TIMEOUT_MS` (5 s), the largest a caller can ask for is `STOP_SETTLE_TIMEOUT_MAX_MS` (60 s), and a non-numeric `settleTimeoutMs` is refused. `{ settled: false }` means the bound passed first: `get` reports that agent with `settling: true`, and a repeat stop waits again. A caller that does not care need not await the reply.
+
 ## Snapshots: `get` and `list`
 
 `subagents:rpc:get` (`{ requestId, agentId }`) replies `{ agent: SubagentInfo & { notificationPending?: true } }` and errors `Agent not found`; `subagents:rpc:list` replies `{ agents: AgentState[] }` for every record the manager holds, nested and workflow-owned included. This exists for a listener that bound late or reloaded mid-run: the events are push-only, so state that changed before it subscribed is otherwise lost. A record remains readable for the ten minutes the manager retains a settled one.
+
+`settling: true` is set on a terminal agent whose tree still has a run in flight — a stopped agent whose tool call ignored the abort, or a child still unwinding. It is not on the events because the terminal event fires from inside the settle path.
 
 `notificationPending` is the one field the events cannot carry: `completed` fires before the notification is queued, so there it would always read false. An orchestrator waiting for "nothing active" must wait for it too, or the notification starts a parent turn right after it concluded none would (#103).
 
