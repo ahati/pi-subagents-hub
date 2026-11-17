@@ -107,7 +107,7 @@ describe("subagents:rpc end to end", () => {
       expect(reply.success).toBe(true);
       expect(reply.data?.version).toBe(2);
       expect([...reply.data?.capabilities ?? []].sort()).toEqual(
-        ["consume", "pause", "resume", "spawn", "steer", "stop"],
+        ["consume", "get", "list", "pause", "resume", "spawn", "steer", "stop", "workflow_get", "workflow_list"],
       );
     } finally {
       await run.dispose();

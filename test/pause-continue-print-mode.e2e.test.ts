@@ -371,7 +371,9 @@ describe("/pause → quit → reload → /continue (real pi sessions, faux model
       // 1. Verify RPC ping returns capabilities.
       const ping = await rpcCall<{ version: number; capabilities: string[] }>("subagents:rpc:ping", {});
       expect(ping.version).toBe(2);
-      expect(ping.capabilities).toEqual(["spawn", "stop", "pause", "resume", "consume", "steer"]);
+      expect(ping.capabilities).toEqual([
+        "spawn", "stop", "pause", "resume", "consume", "steer", "get", "list", "workflow_get", "workflow_list",
+      ]);
 
       // 2. Spawn an agent via RPC endpoint.
       const spawnReply = await rpcCall<{ id: string }>("subagents:rpc:spawn", {

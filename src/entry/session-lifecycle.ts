@@ -8,6 +8,7 @@ import type { AgentManager } from "../agent-manager.js";
 import type { ParkGateController } from "../commands/pause-state.js";
 import type { CompletionOutbox } from "../completion-outbox.js";
 import { type RpcHandle, registerRpcHandlers } from "../cross-extension-rpc.js";
+import { toWorkflowDetail, toWorkflowInfo } from "../workflow-info.js";
 import type { GroupJoinManager } from "../group-join.js";
 import { invalidatePackageCache, setProjectTrusted } from "../package-resources.js";
 import {
@@ -206,6 +207,13 @@ export function registerSessionLifecycle(
         events: pi.events,
         pi,
         getCtx: getCurrentCtx,
+        workflows: {
+          get: (id) => {
+            const task = workflowTasks.get(id);
+            return task === undefined ? undefined : toWorkflowDetail(task);
+          },
+          list: () => [...workflowTasks.values()].map(task => toWorkflowInfo(task)),
+        },
         manager: {
           spawn: spawnTopLevel,
           awaitStartup: (id) => manager.awaitStartup(id),
@@ -295,13 +303,9 @@ export function registerSessionLifecycle(
       }
       return;
     }
-    rpcHandle?.unsubSpawn();
-    rpcHandle?.unsubStop();
-    rpcHandle?.unsubPause();
-    rpcHandle?.unsubResume();
-    rpcHandle?.unsubPing();
-    rpcHandle?.unsubConsume();
-    rpcHandle?.unsubSteer();
+    // Every channel the handle holds, rather than a hand-kept list: a list is
+    // how a newly added channel gets left subscribed across a reload.
+    for (const unsub of Object.values(rpcHandle ?? {})) unsub();
     rpcHandle = undefined;
     setCurrentCtx(undefined);
     if (ownsManagerRegistry && (globalThis as any)[MANAGER_KEY] === registryEntry) {

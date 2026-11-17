@@ -746,6 +746,25 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
     expect(existsSync(scriptLine!.slice("Script: ".length))).toBe(true);
   });
 
+  it("brackets the run with workflow_started and workflow_settled", async () => {
+    await tools.get("SubagentWorkflow").execute("tc-events", { script: inlineScript }, undefined, undefined, workflowCtx());
+    // The tool returns "started"; the run itself settles asynchronously.
+    await vi.waitFor(() => {
+      const events = booted.pi.events.emit.mock.calls;
+      expect(events.some((call: any[]) => call[0] === "subagents:workflow_settled")).toBe(true);
+    });
+
+    const events = booted.pi.events.emit.mock.calls;
+    const started = events.find((call: any[]) => call[0] === "subagents:workflow_started")?.[1];
+    const settled = events.find((call: any[]) => call[0] === "subagents:workflow_settled")?.[1];
+
+    expect(started).toMatchObject({ name: "from-inline", status: "running", agentCount: 0 });
+    // Bracketed: the settled event names the same run and freezes it.
+    expect(settled).toMatchObject({ id: started.id, status: "completed" });
+    expect(typeof settled.durationMs).toBe("number");
+    expect(settled.completedAt).toBeGreaterThan(0);
+  });
+
   it("prefers scriptPath over script when both are given", async () => {
     const path = join(hermetic.dir, "wf.js");
     writeFileSync(path, fileScript);

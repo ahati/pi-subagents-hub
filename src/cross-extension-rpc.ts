@@ -18,6 +18,7 @@ import { isTopLevelAgent } from "./agent-manager.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
 import { type SubagentInfo, toSubagentInfo } from "./subagent-info.js";
+import type { WorkflowDetail, WorkflowInfo } from "./workflow-info.js";
 import type { AgentRecord } from "./types.js";
 
 /** Minimal event bus interface needed by the RPC handlers. */
@@ -37,7 +38,9 @@ export type RpcReply<T = void> =
  * you are reading. Deliberately no runtime list beside it — the set is derived
  * from the handlers `registerRpcHandlers` wires, not declared.
  */
-export type RpcCapability = "spawn" | "stop" | "pause" | "resume" | "consume" | "steer" | "get" | "list";
+export type RpcCapability =
+  | "spawn" | "stop" | "pause" | "resume" | "consume" | "steer"
+  | "get" | "list" | "workflow_get" | "workflow_list";
 
 /**
  * RPC protocol version — bumped only when an existing envelope or method
@@ -55,7 +58,10 @@ export const PROTOCOL_VERSION = 2;
  * `features.includes(...)`. `capabilities` stays the channel inventory, derived
  * from the wired handlers.
  */
-export const FEATURES = ["get", "list", "notification-pending"] as const;
+export const FEATURES = [
+  "get", "list", "notification-pending",
+  "workflow-events", "workflow-get", "workflow-list",
+] as const;
 
 /** Minimal AgentManager interface needed by the spawn/stop/consume/pause/resume RPCs. */
 export interface SpawnCapable {
@@ -104,11 +110,20 @@ export interface SpawnCapable {
   steer(id: string, message: string): Promise<boolean>;
 }
 
+/** Read-only snapshots of workflow runs, for `workflow_get` / `workflow_list`. */
+export interface WorkflowReader {
+  /** One run's live detail (summary + per-agent snapshot), or undefined. */
+  get(id: string): WorkflowDetail | undefined;
+  /** Every current run, summary only. */
+  list(): WorkflowInfo[];
+}
+
 export interface RpcDeps {
   events: EventBus;
   pi: unknown;                    // passed through to manager.spawn
   getCtx: () => unknown | undefined;  // returns current ExtensionContext
   manager: SpawnCapable;
+  workflows: WorkflowReader;
 }
 
 export interface RpcHandle {
@@ -121,6 +136,8 @@ export interface RpcHandle {
   unsubSteer: () => void;
   unsubGet: () => void;
   unsubList: () => void;
+  unsubWorkflowGet: () => void;
+  unsubWorkflowList: () => void;
 }
 
 /**
@@ -152,7 +169,7 @@ function handleRpc<P extends { requestId: string }>(
  * the event bus. Returns unsub functions for cleanup.
  */
 export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
-  const { events, pi, getCtx, manager } = deps;
+  const { events, pi, getCtx, manager, workflows } = deps;
 
   const capabilities: RpcCapability[] = [];
 
@@ -337,8 +354,22 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
     "list", () => ({ agents: manager.listAgents().map(record => snapshot(record)) }),
   );
 
+  // Workflow-run snapshots, for a consumer that missed `workflow_started` or
+  // wants the live per-agent detail — pulled rather than pushed, at whatever
+  // cadence the consumer wants. A run is top-level, so no ownership guard.
+  // `get` carries the per-agent `agents` snapshot; `list` is summaries only.
+  const unsubWorkflowGet = wire<{ requestId: string; workflowId: string }>(
+    "workflow_get", ({ workflowId }) => {
+      const workflow = workflows.get(workflowId);
+      if (!workflow) throw new Error("Workflow not found");
+      return { workflow };
+    },
+  );
+
+  const unsubWorkflowList = wire("workflow_list", () => ({ workflows: workflows.list() }));
+
   return {
     unsubPing, unsubSpawn, unsubStop, unsubPause, unsubResume, unsubConsume, unsubSteer,
-    unsubGet, unsubList,
+    unsubGet, unsubList, unsubWorkflowGet, unsubWorkflowList,
   };
 }

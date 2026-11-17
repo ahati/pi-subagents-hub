@@ -9,7 +9,9 @@ import { isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.
  * Hard-coded on purpose: the advertised capabilities are a contract, so this
  * must not be derived from the implementation's own list.
  */
-const EXPECTED_CAPABILITIES = ["consume", "get", "list", "pause", "resume", "spawn", "steer", "stop"]; // sorted
+const EXPECTED_CAPABILITIES = [
+  "consume", "get", "list", "pause", "resume", "spawn", "steer", "stop", "workflow_get", "workflow_list",
+]; // sorted
 
 /** Simple in-process event bus for testing. */
 function createEventBus(): EventBus {
@@ -60,6 +62,7 @@ function record(over: Record<string, unknown> = {}) {
 describe("cross-extension RPC", () => {
   let events: EventBus;
   let manager: SpawnCapable;
+  let workflows: RpcDeps["workflows"];
   let ctx: object | undefined;
   let deps: RpcDeps;
 
@@ -78,7 +81,11 @@ describe("cross-extension RPC", () => {
       steer: vi.fn().mockResolvedValue(true),
     };
     ctx = { session: true };
-    deps = { events, pi: { events }, getCtx: () => ctx, manager };
+    workflows = {
+      get: vi.fn().mockReturnValue({ id: "wf_1", name: "run", status: "running", agents: [] }),
+      list: vi.fn().mockReturnValue([{ id: "wf_1", name: "run", status: "running" }]),
+    };
+    deps = { events, pi: { events }, getCtx: () => ctx, manager, workflows };
   });
 
   // --- ping ---
@@ -765,7 +772,7 @@ describe("cross-extension RPC", () => {
 
     beforeEach(() => {
       ctx = { session: true, modelRegistry: registry };
-      deps = { events, pi: { events }, getCtx: () => ctx, manager };
+      deps = { events, pi: { events }, getCtx: () => ctx, manager, workflows };
     });
 
     it("resolves a string model to a Model instance before manager.spawn", async () => {
@@ -889,7 +896,7 @@ describe("cross-extension RPC", () => {
       );
       setScopeModelsEnabled(true);
       ctx = { session: true, cwd: projectDir, modelRegistry: registry };
-      deps = { events, pi: { events }, getCtx: () => ctx, manager };
+      deps = { events, pi: { events }, getCtx: () => ctx, manager, workflows };
     });
 
     afterEach(() => {

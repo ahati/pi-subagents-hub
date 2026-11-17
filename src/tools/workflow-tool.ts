@@ -15,6 +15,7 @@ import { renderWorkflowCard } from "../ui/workflow-card.js";
 import { decideWorkflowCollision } from "../workflow/collisions.js";
 import { WORKFLOW_ENTRY_TYPE, type WorkflowEntryData, workflowEntryData } from "../workflow/entry.js";
 import { createWorkflowHost } from "../workflow/host.js";
+import { toWorkflowInfo } from "../workflow-info.js";
 import { appendJournal, readJournal, type WorkflowJournalEntry } from "../workflow/journal.js";
 import { extractMeta, type WorkflowMeta, workflowCallName } from "../workflow/meta.js";
 import { elapsedMs } from "../workflow/progress.js";
@@ -72,6 +73,23 @@ export async function runWorkflowTask(
   agentActivity: Map<string, AgentActivity>,
   task: WorkflowTask,
 ): Promise<void> {
+  /**
+   * Announce on the bus, and never fail the run for it.
+   *
+   * A run relaunched by `/continue` after a reload holds the activation it was
+   * parked under, and emitting through a stale `pi` throws. The announcement is
+   * an observability side channel: losing it costs a mirror one update, while
+   * letting it throw would abandon work the run is about to do.
+   */
+  const announce = (event: string, build: () => unknown): void => {
+    try {
+      pi.events.emit(event, build());
+    } catch {
+      /* stale `pi`, or a payload that could not be built */
+    }
+  };
+
+  announce("subagents:workflow_started", () => toWorkflowInfo(task));
   try {
     const result = await runWorkflow({
       script: task.script,
@@ -98,6 +116,10 @@ export async function runWorkflowTask(
     completeWorkflowTask(task, result);
   } catch (err) {
     failWorkflowTask(task, err instanceof Error ? err.message : String(err));
+  } finally {
+    // Brackets the run: a mirror that saw no start would otherwise never learn
+    // the run ended. Per-agent detail is pulled (`workflow_get`), not pushed.
+    announce("subagents:workflow_settled", () => toWorkflowInfo(task));
   }
 }
 
