@@ -156,6 +156,24 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
     deliverNestedCompletion(owner, nestedCompletionMessage(record));
   }
 
+  /**
+   * Emit a lifecycle event, and never let it fail the run that produced it.
+   *
+   * A run can settle after the session that started it was replaced or reloaded
+   * — a parked workflow's children do exactly that on `/continue` — and the
+   * activation this callback closed over then throws on `pi.events.emit`. The
+   * event is lost either way; throwing would turn a stale activation into a
+   * failed settle, which is why the same guard sits around the workflow
+   * announcements and around `subagents:usage` below.
+   */
+  const emitLifecycle = (event: string, payload: unknown): void => {
+    try {
+      pi.events.emit(event, payload);
+    } catch {
+      /* stale activation */
+    }
+  };
+
   const manager = new AgentManager((record) => {
     const topLevel = isTopLevelAgent(record);
     if (topLevel) {
@@ -176,9 +194,9 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
     // whatever AgentRecord happens to hold.
     const eventData = toSubagentInfo(record);
     if (isError) {
-      pi.events.emit("subagents:failed", eventData);
+      emitLifecycle("subagents:failed", eventData);
     } else {
-      pi.events.emit("subagents:completed", eventData);
+      emitLifecycle("subagents:completed", eventData);
     }
 
     // An owned agent is reported and done: it has no saved record, widget row
@@ -224,9 +242,9 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
         fleet.update();
       }
     }
-    pi.events.emit("subagents:started", toSubagentInfo(record));
+    emitLifecycle("subagents:started", toSubagentInfo(record));
   }, (record, info) => {
-    pi.events.emit("subagents:compacted", {
+    emitLifecycle("subagents:compacted", {
       ...toSubagentInfo(record),
       reason: info.reason,
       tokensBefore: info.tokensBefore,
@@ -254,7 +272,7 @@ export function createManagerSetup(deps: ManagerSetupDeps) {
       // ignore
     }
   }, (record, message) => {
-    pi.events.emit("subagents:steered", { ...toSubagentInfo(record), message });
+    emitLifecycle("subagents:steered", { ...toSubagentInfo(record), message });
   });
 
   async function startBackgroundResume(
