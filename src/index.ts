@@ -39,6 +39,7 @@ import {
   setFallbackSubagent,
   setToolDescriptionMode,
 } from "./agent-types.js";
+import { setCacheRetention } from "./cache-retention.js";
 import { inChildSessionContext } from "./child-context.js";
 import {
   type AgentsMenuDeps,
@@ -447,6 +448,7 @@ export default function (pi: ExtensionAPI) {
     setFleetView: setFleetViewEnabled,
     setAgentMentions: setAgentMentionMode,
     setRememberAgents,
+    setCacheRetention,
     setOutputTranscript: setOutputTranscriptDefault,
     setWorktreeIsolation: setWorktreeIsolationEnabled,
     setWorktreeTimeoutSeconds,

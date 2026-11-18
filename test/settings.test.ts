@@ -100,12 +100,13 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({});
   });
 
-  it("keeps file-only cacheRetention when saving menu settings", () => {
+  it("saves cacheRetention as an ordinary menu setting", () => {
     writeProject({ cacheRetention: "long", maxConcurrent: 8 });
 
-    saveSettings({ maxConcurrent: 4 }, projectDir);
+    // The menu snapshot carries it, so a save writes what the menu shows.
+    saveSettings({ cacheRetention: "short", maxConcurrent: 4 }, projectDir);
 
-    expect(loadSettings(projectDir)).toEqual({ cacheRetention: "long", maxConcurrent: 4 });
+    expect(loadSettings(projectDir)).toEqual({ cacheRetention: "short", maxConcurrent: 4 });
   });
 
   it("accepts toolExposure values, drops unknown ones, and preserves it on save", () => {
@@ -705,6 +706,7 @@ describe("settings persistence", () => {
         setFleetView: vi.fn(),
         setAgentMentions: vi.fn(),
       setRememberAgents: vi.fn(),
+      setCacheRetention: vi.fn(),
         setViewerMarkdown: vi.fn(),
         setOutputTranscript: vi.fn(),
         setWorktreeIsolation: vi.fn(),
@@ -733,6 +735,15 @@ describe("settings persistence", () => {
       vi.mocked(appliers.setMaxConcurrentForeground).mockClear();
       applySettings({}, appliers);
       expect(appliers.setMaxConcurrentForeground).not.toHaveBeenCalled();
+    });
+
+    it("applies cacheRetention", () => {
+      applySettings({ cacheRetention: "short" }, appliers);
+      expect(appliers.setCacheRetention).toHaveBeenCalledWith("short");
+
+      vi.mocked(appliers.setCacheRetention).mockClear();
+      applySettings({}, appliers);
+      expect(appliers.setCacheRetention).not.toHaveBeenCalled();
     });
 
     it("applies worktreeTimeoutSeconds", () => {
@@ -1009,6 +1020,7 @@ describe("settings persistence", () => {
         setFleetView: vi.fn(),
         setAgentMentions: vi.fn(),
       setRememberAgents: vi.fn(),
+      setCacheRetention: vi.fn(),
         setViewerMarkdown: vi.fn(),
         setOutputTranscript: vi.fn(),
         setWorktreeIsolation: vi.fn(),

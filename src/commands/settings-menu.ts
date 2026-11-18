@@ -29,6 +29,7 @@ import {
   NO_FALLBACK,
   setFallbackSubagent,
 } from "../agent-types.js";
+import { getCacheRetention, setCacheRetention } from "../cache-retention.js";
 import {
   isScopeModelsEnabled,
   setScopeModelsEnabled,
@@ -56,6 +57,7 @@ import {
 } from "../settings.js";
 import type {
   AgentMentionMode,
+  CacheRetentionSetting,
   JoinMode,
   UIStyle,
   ViewerStyle,
@@ -136,6 +138,7 @@ function snapshotSettings(deps: SettingsMenuDeps) {
     fleetView: deps.isFleetViewEnabled(),
     agentMentions: deps.getAgentMentionMode(),
     rememberAgents: getRememberAgents(),
+    cacheRetention: getCacheRetention(),
     outputTranscript: getOutputTranscriptDefault(),
     worktreeIsolation: isWorktreeIsolationEnabled(),
     worktreeTimeoutSeconds: getWorktreeTimeoutSeconds(),
@@ -397,6 +400,15 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
         values: ["on", "off"],
       },
       {
+        id: "cacheRetention",
+        label: "Prompt cache retention",
+        description:
+          "Prompt cache lifetime for subagent model calls: short (5 min on Anthropic), long (1 hour), none, or inherit "
+          + "(pi's default, incl. PI_CACHE_RETENTION). An agent's cache_retention frontmatter overrides it; the main session is unaffected. Applies to agents started after the change",
+        currentValue: getCacheRetention(),
+        values: ["inherit", "short", "long", "none"],
+      },
+      {
         id: "worktreeIsolation",
         label: "Worktree isolation",
         description:
@@ -613,6 +625,9 @@ export async function showSettings(ctx: ExtensionCommandContext, deps: SettingsM
           : `Unknown agent types will fall back to ${value}`,
         deps,
       );
+    } else if (id === "cacheRetention") {
+      setCacheRetention(value as CacheRetentionSetting);
+      notifyApplied(ctx, `Prompt cache retention set to ${value}`, deps);
     } else if (id === "outputTranscript") {
       const enabled = value === "on";
       setOutputTranscriptDefault(enabled);
