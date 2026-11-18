@@ -6,7 +6,15 @@ import type { Context } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentCall, isSubagentContext, type PrintModeRun, runPrintMode } from "./helpers/print-mode-runner.js";
 
-vi.setConfig({ testTimeout: 30_000 });
+// Real pi sessions booted in-process, and the assertions are about ordering,
+// not latency. Under a full-suite run the CPU contention alone made this file
+// exceed a 30 s test timeout before its blocking tool was even entered, so the
+// budgets are set for a loaded machine: the waits below are safety nets, not
+// the thing under test.
+const SETUP_TIMEOUT_MS = 45_000;
+const TEST_TIMEOUT_MS = 90_000;
+
+vi.setConfig({ testTimeout: TEST_TIMEOUT_MS });
 
 const BLOCKING_TOOL_EXTENSION = fileURLToPath(
   new URL("./fixtures/blocking-tool-ext.mjs", import.meta.url),
@@ -133,7 +141,7 @@ describe("background completion steering scheduling", () => {
       new Promise<never>((_, reject) => {
         setTimeout(() => {
           reject(new Error(`blocking tool was not entered; parent=${parentModelCalls} child=${childModelCalls}`));
-        }, 10_000);
+        }, SETUP_TIMEOUT_MS);
       }),
     ]);
     expect(parentModelCalls).toBe(1);
@@ -141,7 +149,7 @@ describe("background completion steering scheduling", () => {
     await Promise.race([
       backgroundAgentCompleted,
       new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("background completion event was not emitted")), 10_000);
+        setTimeout(() => reject(new Error("background completion event was not emitted")), SETUP_TIMEOUT_MS);
       }),
     ]);
     expect(completedAgentEvent).toEqual(expect.objectContaining({ description: "background child" }));
