@@ -21,6 +21,7 @@ import {
   isDisabledContent,
   isEmptyStub,
   locateAgentFile,
+  serializeAgentFile,
 } from "../src/agent-file-toggle.js";
 import { parseAgentFrontmatter } from "../src/custom-agents.js";
 
@@ -446,5 +447,19 @@ describe("buildNewAgentFile", () => {
   it("keeps the system prompt as the body", () => {
     const content = buildNewAgentFile({ ...base, systemPrompt: "Line 1.\n\nLine 2." });
     expect(parseFrontmatter<Record<string, unknown>>(content).body).toBe("Line 1.\n\nLine 2.");
+  });
+});
+
+describe("cache_retention in the serialized file", () => {
+  it("writes the field back, so an ejected agent keeps its override", () => {
+    const text = serializeAgentFile({
+      name: "cached",
+      description: "Cached agent",
+      builtinToolNames: ["read"],
+      systemPrompt: "Go.",
+      promptMode: "replace",
+      cacheRetention: "long",
+    } as never);
+    expect(text).toContain("cache_retention: long");
   });
 });

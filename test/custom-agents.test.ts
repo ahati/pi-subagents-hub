@@ -775,6 +775,26 @@ All tools.`);
     expect(result.get("unrestricted")!.disallowedTools).toBeUndefined();
   });
 
+  it("parses the cache_retention frontmatter, and ignores inherit or junk", () => {
+    writeAgent("short-cache", `---
+description: Short cache
+cache_retention: short
+---
+
+Go.`);
+    writeAgent("inherit-cache", `---
+description: Inherit cache
+cache_retention: inherit
+---
+
+Go.`);
+
+    const result = loadCustomAgents(tmpDir);
+    // No `inherit` in the config: omitting the key already defers to the setting.
+    expect(result.get("short-cache")!.cacheRetention).toBe("short");
+    expect(result.get("inherit-cache")!.cacheRetention).toBeUndefined();
+  });
+
   it("parses memory scope", () => {
     writeAgent("rememberer", `---
 description: Agent with memory

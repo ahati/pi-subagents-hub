@@ -47,7 +47,7 @@ import {
   getReadOnlyMemoryToolNames,
   getToolNamesForType,
 } from "../agent-types.js";
-import { installSubagentCacheRetention } from "../cache-retention.js";
+import { getCacheRetention, installCacheRetention } from "../cache-retention.js";
 import { runInChildSessionContext } from "../child-context.js";
 import { buildParentContext } from "../context.js";
 import { DEFAULT_AGENTS } from "../default-agents.js";
@@ -674,7 +674,7 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
   }
 
   const { session } = await runInChildSessionContext(() => createAgentSession(sessionOpts));
-  installSubagentCacheRetention(session, options.configCwd ?? effectiveCwd);
+  installCacheRetention(session, agentConfig?.cacheRetention ?? getCacheRetention());
   const effectiveModel = options.resumeSessionFile !== undefined
     ? (restoredModel ?? session.model ?? resolveDefaultModel(ctx.model, ctx.modelRegistry, agentConfig?.model))
     : model;

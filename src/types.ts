@@ -2,7 +2,7 @@
  * types.ts — Type definitions for the subagent system.
  */
 
-import type { ThinkingLevel } from "@earendil-works/pi-ai";
+import type { CacheRetention, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { LifetimeUsage } from "./usage.js";
 
@@ -56,6 +56,8 @@ export interface AgentConfig {
   maxTurns?: number;
   /** Persist this subagent as a normal pi session instead of keeping it in memory only. */
   persistSession?: boolean;
+  /** Prompt-cache retention for this agent's model calls; overrides the `cacheRetention` setting. */
+  cacheRetention?: CacheRetention;
   /** Write the subagent's .output transcript. Defaults to true; false suppresses only that transcript. */
   outputTranscript?: boolean;
   /** Optional session directory used when persistSession is true. Omitted = pi's normal session location. */
@@ -470,3 +472,9 @@ export interface ScheduleStoreData {
   version: 1;
   jobs: ScheduledSubagent[];
 }
+
+/**
+ * Prompt-cache retention: pi's own values, plus `inherit` — the setting's
+ * default — which leaves pi's choice (including `PI_CACHE_RETENTION`) alone.
+ */
+export type CacheRetentionSetting = CacheRetention | "inherit";

@@ -8,10 +8,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import type { CacheRetention } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
-import type { AgentMentionMode, JoinMode, UIStyle, ViewerStyle } from "./types.js";
+import type { AgentMentionMode, CacheRetentionSetting, JoinMode, UIStyle, ViewerStyle } from "./types.js";
 import { MAX_WORKTREE_TIMEOUT_SECONDS, MIN_WORKTREE_TIMEOUT_SECONDS } from "./worktree.js";
 
 export type { UIStyle };
@@ -383,12 +382,19 @@ export interface SubagentsSettings {
    * Defaults to `["claude-bridge"]`. Set to `[]` to force stripped prompts for all providers.
    */
   uncutPromptProviders?: string[];
+  /**
+   * Prompt-cache retention for subagent model calls: `none`, `short` (5 min on
+   * Anthropic) or `long` (1 hour). Defaults to `inherit`, which leaves pi's
+   * default — and its `PI_CACHE_RETENTION` environment variable — in charge.
+   * An agent's `cache_retention:` frontmatter overrides it, and a request that
+   * sets its own retention (compaction passes `none`) keeps it. The parent
+   * session is never affected. Applies to agents started after a change.
+   */
+  cacheRetention?: CacheRetentionSetting;
 }
 
 /** Settings that exist only in subagents.json, not in the /agents menu snapshot. */
 export interface SubagentsFileSettings extends SubagentsSettings {
-  /** Per-child model-call prompt cache retention. `inherit` (or absent) leaves Pi's request options untouched, including `PI_CACHE_RETENTION`. */
-  cacheRetention?: CacheRetention | "inherit";
   /**
    * How the model reaches this extension's tools: `direct` (default) or
    * `deferred`.
@@ -435,6 +441,7 @@ export interface SettingsAppliers {
   setFleetView: (b: boolean) => void;
   setAgentMentions: (mode: AgentMentionMode) => void;
   setRememberAgents: (b: boolean) => void;
+  setCacheRetention: (value: CacheRetentionSetting) => void;
   setOutputTranscript: (b: boolean) => void;
   setWorktreeIsolation: (b: boolean) => void;
   setWorktreeTimeoutSeconds: (seconds: number) => void;
@@ -734,12 +741,11 @@ export function saveSettings(s: SubagentsSettings, cwd: string = process.cwd()):
     // The menu snapshot has no row for file-only settings; carry them over so
     // changing an ordinary setting cannot silently drop them. A malformed file
     // has nothing to carry (and must not turn the write into a failure).
-    let fileOnly: Pick<SubagentsFileSettings, "cacheRetention" | "requiredExtensions" | "toolExposure"> = {};
+    let fileOnly: Pick<SubagentsFileSettings, "requiredExtensions" | "toolExposure"> = {};
     try {
       if (existsSync(path)) {
         const existing = sanitize(JSON.parse(readFileSync(path, "utf-8")));
         fileOnly = {
-          ...(existing.cacheRetention !== undefined ? { cacheRetention: existing.cacheRetention } : {}),
           ...(existing.requiredExtensions !== undefined ? { requiredExtensions: existing.requiredExtensions } : {}),
           ...(existing.toolExposure !== undefined ? { toolExposure: existing.toolExposure } : {}),
         };
@@ -777,6 +783,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.fleetView === "boolean") appliers.setFleetView(s.fleetView);
   if (s.agentMentions) appliers.setAgentMentions(s.agentMentions);
   if (typeof s.rememberAgents === "boolean") appliers.setRememberAgents(s.rememberAgents);
+  if (s.cacheRetention) appliers.setCacheRetention(s.cacheRetention);
   if (typeof s.outputTranscript === "boolean") appliers.setOutputTranscript(s.outputTranscript);
   if (typeof s.worktreeIsolation === "boolean") appliers.setWorktreeIsolation(s.worktreeIsolation);
   if (typeof s.worktreeTimeoutSeconds === "number") {
