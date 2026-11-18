@@ -100,3 +100,28 @@ describe("toWorkflowDetail", () => {
     expect(detail.agents[1]).toMatchObject({ index: 1, label: "a1", state: "error", error: "nope" });
   });
 });
+
+describe("toWorkflowDetail", () => {
+  it("carries the logs, the args and the return value beside the summary", () => {
+    const detail = toWorkflowDetail(task({
+      status: "completed",
+      args: { n: 7 },
+      value: { ok: true },
+      workflowProgress: progress,
+    }), 9999);
+
+    expect(detail.logs).toEqual(["hello"]);
+    expect(detail.args).toEqual({ n: 7 });
+    expect(detail.result).toEqual({ ok: true });
+    // A copy per payload: mutating one listener's view cannot touch the run.
+    (detail.result as { ok: boolean }).ok = false;
+    expect((toWorkflowDetail(task({ value: { ok: true } }), 1).result as { ok: boolean }).ok).toBe(true);
+  });
+
+  it("omits args and result when the run had none", () => {
+    const detail = toWorkflowDetail(task(), 1);
+    expect(detail).not.toHaveProperty("args");
+    expect(detail).not.toHaveProperty("result");
+    expect(detail.logs).toEqual([]);
+  });
+});

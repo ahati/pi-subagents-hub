@@ -107,7 +107,7 @@ describe("cross-extension RPC", () => {
       expect(data.features).toEqual(
         expect.arrayContaining([
           "get", "list", "notification-pending", "workflow-events", "workflow-get", "workflow-list",
-          "stop-settles", "settling",
+          "stop-settles", "settling", "workflow-result", "workflow-args", "workflow-logs",
         ]),
       );
     });

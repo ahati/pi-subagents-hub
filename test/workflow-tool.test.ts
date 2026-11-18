@@ -746,6 +746,32 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
     expect(existsSync(scriptLine!.slice("Script: ".length))).toBe(true);
   });
 
+  it("carries the run's args on start and its return value on settle", async () => {
+    const script = 'export const meta = { name: "with-args", description: "d" };\nreturn { ok: true, n: args.n };\n';
+    await tools.get("SubagentWorkflow").execute(
+      "tc-args",
+      { script, args: { n: 7 } },
+      undefined,
+      undefined,
+      workflowCtx(),
+    );
+    await vi.waitFor(() => {
+      const events = booted.pi.events.emit.mock.calls;
+      expect(events.some((call: any[]) => call[0] === "subagents:workflow_settled")).toBe(true);
+    });
+
+    const events = booted.pi.events.emit.mock.calls;
+    const started = events.find((call: any[]) => call[0] === "subagents:workflow_started")?.[1];
+    const settled = events.find((call: any[]) => call[0] === "subagents:workflow_settled")?.[1];
+
+    // `args` is the script's input, known before it runs; `result` is its
+    // return value, known only once it has.
+    expect(started.args).toEqual({ n: 7 });
+    expect(started.result).toBeUndefined();
+    expect(settled.result).toEqual({ ok: true, n: 7 });
+    expect(settled.args).toBeUndefined();
+  });
+
   it("brackets the run with workflow_started and workflow_settled", async () => {
     await tools.get("SubagentWorkflow").execute("tc-events", { script: inlineScript }, undefined, undefined, workflowCtx());
     // The tool returns "started"; the run itself settles asynchronously.

@@ -32,7 +32,7 @@ import {
   workflowRunId,
 } from "../workflow/task.js";
 import { workflowToolDescription } from "../workflow/tool-description.js";
-import { toWorkflowInfo } from "../workflow-info.js";
+import { toWorkflowInfo, workflowArgs, workflowResult } from "../workflow-info.js";
 import { buildCompactTypeListText, buildTypeListText } from "./agent-tool-schema.js";
 
 export interface WorkflowToolDeps {
@@ -89,7 +89,7 @@ export async function runWorkflowTask(
     }
   };
 
-  announce("subagents:workflow_started", () => toWorkflowInfo(task));
+  announce("subagents:workflow_started", () => ({ ...toWorkflowInfo(task), ...workflowArgs(task) }));
   try {
     const result = await runWorkflow({
       script: task.script,
@@ -119,7 +119,7 @@ export async function runWorkflowTask(
   } finally {
     // Brackets the run: a mirror that saw no start would otherwise never learn
     // the run ended. Per-agent detail is pulled (`workflow_get`), not pushed.
-    announce("subagents:workflow_settled", () => toWorkflowInfo(task));
+    announce("subagents:workflow_settled", () => ({ ...toWorkflowInfo(task), ...workflowResult(task) }));
   }
 }
 

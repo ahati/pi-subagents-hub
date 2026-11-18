@@ -45,6 +45,8 @@ check the entries below for behaviour changes.
 
 - **Lifecycle events cover nested and workflow agents.** An extension following every agent had to scrape session files to see an owned agent start or finish. They now emit `started`, `completed`, `failed`, `steered` and `compacted` with `parentAgentId` / `workflowId` set and `depth`, and still get no completion message, saved record or widget row of their own. The ownership guard on stop/pause/resume/steer is unchanged. ([tintinweb/pi-subagents#450](https://github.com/tintinweb/pi-subagents/pull/450) — thanks [@sergio-agosti](https://github.com/sergio-agosti))
 
+- **A workflow run's `args`, `log()` lines and return value are on the bus.** `workflow_started` carries the call's `args` and `workflow_settled` the script's `result` (untruncated, no `JSON.parse`), while `workflow_get` carries both plus the run's `logs`; `workflow_list` stays summaries only. Each is a fresh copy, absent when there was none. `ping` advertises `workflow-args`, `workflow-logs` and `workflow-result`. ([tintinweb/pi-subagents#450](https://github.com/tintinweb/pi-subagents/pull/450) — thanks [@tintinweb](https://github.com/tintinweb))
+
 ### Changed
 
 - **A reopened agent keeps the model and thinking level it last ran with.** `Agent({ resume })`, an `@handle` after eviction, `/continue` and a workflow's `resume` now restore the saved selection instead of falling back to the parent session's model; the agent type's current pin is the fallback when the saved session records neither. Tools, system prompt and turn caps still follow the type's current definition. ([#13](https://github.com/ahati/pi-subagents-hub/pull/13) — thanks [@KuljeetSinghXDA](https://github.com/KuljeetSinghXDA))

@@ -71,6 +71,7 @@ export const STOP_SETTLE_TIMEOUT_MAX_MS = 60_000;
 export const FEATURES = [
   "get", "list", "notification-pending",
   "workflow-events", "workflow-get", "workflow-list",
+  "workflow-result", "workflow-args", "workflow-logs",
   "stop-settles", "settling",
 ] as const;
 
