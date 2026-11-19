@@ -4,6 +4,7 @@
 
 import { isTopLevelAgent } from "../../agent-manager.js";
 import { buildPhaseGroups, type PhaseGroup } from "../../workflow/progress.js";
+import { buildAgentHierarchy } from "../agent-tree.js";
 import type { FleetWorkflow } from "../fleet-list.js";
 import {
   type AgentHubDeps,
@@ -30,37 +31,22 @@ export function hubWorkflows(deps: AgentHubDeps): FleetWorkflow[] {
  */
 export function hubScopeEntries(deps: AgentHubDeps, scopeId?: string): HubEntry[] {
   const all = deps.manager.listAgents();
+  const sessionAgents = all.filter(a => a.session);
+
   if (scopeId === undefined) {
-    const roots = all
-      .filter(a => isTopLevelAgent(a) && a.session)
+    const roots = sessionAgents
+      .filter(a => isTopLevelAgent(a))
       .sort((a, b) => a.startedAt - b.startedAt);
 
-    const entries: HubEntry[] = [];
-    for (const root of roots) {
-      const children = all
-        .filter(a => a.parentAgentId === root.id && a.session)
-        .sort((a, b) => a.startedAt - b.startedAt);
-
-      entries.push({
-        kind: "agent",
-        record: root,
-        depth: 0,
-        childCount: children.length,
-      });
-
-      for (let i = 0; i < children.length; i++) {
-        const child = children[i];
-        const grandchildren = all.filter(a => a.parentAgentId === child.id && a.session);
-        entries.push({
-          kind: "agent",
-          record: child,
-          depth: 1,
-          isLastChild: i === children.length - 1,
-          childCount: grandchildren.length,
-          parentRecord: root,
-        });
-      }
-    }
+    const nodes = buildAgentHierarchy(sessionAgents, { roots, maxDepth: 1 });
+    const entries: HubEntry[] = nodes.map(n => ({
+      kind: "agent",
+      record: n.record,
+      depth: n.depth,
+      isLastChild: n.isLastChild,
+      childCount: n.childCount,
+      parentRecord: n.parentRecord,
+    }));
 
     entries.push(...hubWorkflows(deps).map(workflow => ({ kind: "workflow" as const, workflow })));
     return entries;
@@ -69,33 +55,20 @@ export function hubScopeEntries(deps: AgentHubDeps, scopeId?: string): HubEntry[
   const root = all.find(a => a.id === scopeId);
   if (!root) return hubScopeEntries(deps, undefined);
 
-  const children = all
-    .filter(a => a.parentAgentId === root.id && a.session)
-    .sort((a, b) => a.startedAt - b.startedAt);
-
   const parentRecord = root.parentAgentId ? all.find(a => a.id === root.parentAgentId) : undefined;
-  const entries: HubEntry[] = [{
-    kind: "agent",
-    record: root,
-    depth: 0,
-    childCount: children.length,
-    parentRecord,
-  }];
-
-  for (let i = 0; i < children.length; i++) {
-    const child = children[i];
-    const grandchildren = all.filter(a => a.parentAgentId === child.id && a.session);
-    entries.push({
-      kind: "agent",
-      record: child,
-      depth: 1,
-      isLastChild: i === children.length - 1,
-      childCount: grandchildren.length,
-      parentRecord: root,
-    });
+  const nodes = buildAgentHierarchy(sessionAgents, { roots: [root], maxDepth: 1 });
+  if (nodes.length > 0) {
+    nodes[0].parentRecord = parentRecord;
   }
 
-  return entries;
+  return nodes.map(n => ({
+    kind: "agent",
+    record: n.record,
+    depth: n.depth,
+    isLastChild: n.isLastChild,
+    childCount: n.childCount,
+    parentRecord: n.parentRecord,
+  }));
 }
 
 /**

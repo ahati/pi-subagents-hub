@@ -18,6 +18,7 @@ import {
   type LoadExtensionsResult,
   SessionManager,
   SettingsManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
   type Conversation,
@@ -408,11 +409,11 @@ async function createRunnerResourceLoader(
 }
 
 interface SessionToolLoadout {
-  model: any;
-  thinkingLevel: any;
-  nestedTools: any[];
-  askTools: any[];
-  structuredTools: any[];
+  model: Model<any> | undefined;
+  thinkingLevel: EffectiveThinkingLevel | undefined;
+  nestedTools: ToolDefinition[];
+  askTools: ToolDefinition[];
+  structuredTools: ToolDefinition[];
   structuredCapture: ReturnType<typeof createStructuredCapture> | undefined;
   disallowedSet: Set<string> | undefined;
   readmitToolNames: Set<string>;
@@ -481,20 +482,20 @@ function buildSessionToolLoadout(
 
   const { disallowedSet, tools: nestedTools } = nested;
 
-  const askTools = options.nestedRuntime && !isolated && !nestedTools.some((tool: any) => tool.name === "ask_parent")
+  const askTools = options.nestedRuntime && !isolated && !nestedTools.some((tool) => tool.name === "ask_parent")
     ? createAskAnswerTools({
         manager: options.nestedRuntime.manager,
         pi: options.pi,
         parentAgentId: options.nestedRuntime.parentAgentId,
       })
     : [];
-  const nestedToolNames = new Set([...nestedTools, ...askTools].map((tool: any) => tool.name));
+  const nestedToolNames = new Set([...nestedTools, ...askTools].map((tool) => tool.name));
 
   const structuredCapture = options.structuredOutput ? createStructuredCapture() : undefined;
   const structuredTools = options.structuredOutput && structuredCapture
     ? [createStructuredOutputTool(options.structuredOutput, structuredCapture)]
     : [];
-  const structuredToolNames = new Set(structuredTools.map((tool: any) => tool.name));
+  const structuredToolNames = new Set(structuredTools.map((tool) => tool.name));
   const readmitToolNames = new Set<string>([
     ...[...nestedToolNames].filter((name: string) => !disallowedSet?.has(name)),
     ...structuredToolNames,
@@ -581,11 +582,11 @@ interface CreateSessionParams {
   agentDir: string;
   loader: DefaultResourceLoader;
   sessionSettingsManager: SettingsManager;
-  model: any;
-  thinkingLevel: any;
+  model: Model<any> | undefined;
+  thinkingLevel: EffectiveThinkingLevel | undefined;
   sessionTools: string[] | undefined;
   sessionExcludeTools: string[] | undefined;
-  customTools: any[];
+  customTools: ToolDefinition[];
   noExtensions: boolean;
   nestedCallGate: NestedCallGate;
   toolNames: string[];
