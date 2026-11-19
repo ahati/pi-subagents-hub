@@ -9,6 +9,11 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **FleetView Left-arrow navigation and auto-expansion on item changes.** Restored Left-arrow key activation for the below-editor FleetView at an empty prompt and updated auto-expansion to monitor both agent and workflow changes. Fixed setting-descriptor test suite isolation so test runs no longer pollute global `subagents.json` with disabled `fleetView`.
+
+
 ## [2026.11.191] - 2026-11-19
 
 > **⚠️ Behavior change — the `subagents:rpc:stop` reply can arrive up to 5 s later** ([#443](https://github.com/tintinweb/pi-subagents/issues/443)). It now waits until the stopped agent and every agent below it have finished, and returns `{ settled }`. A caller whose stop timeout is under 5 s should raise it, or pass a smaller `settleTimeoutMs`.

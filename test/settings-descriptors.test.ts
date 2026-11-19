@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   describeGateSetting,
   gateAdmitsAnything,
@@ -39,7 +42,7 @@ function makeMockDeps(): SettingsMenuDeps {
     setUIStyle: vi.fn(),
     getViewerStyle: vi.fn(() => "chat"),
     setViewerStyle: vi.fn(),
-    isFleetViewEnabled: vi.fn(() => false),
+    isFleetViewEnabled: vi.fn(() => true),
     setFleetViewEnabled: vi.fn(),
     getAgentMentionMode: vi.fn(() => "model"),
     setAgentMentionMode: vi.fn(),
@@ -67,6 +70,24 @@ function makeMockCtx(): ExtensionCommandContext {
 }
 
 describe("settings-descriptors", () => {
+  let tmpGlobalDir: string;
+  let originalAgentDir: string | undefined;
+
+  beforeEach(() => {
+    tmpGlobalDir = mkdtempSync(join(tmpdir(), "pi-settings-descriptors-"));
+    originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = tmpGlobalDir;
+  });
+
+  afterEach(() => {
+    if (originalAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    }
+    rmSync(tmpGlobalDir, { recursive: true, force: true });
+  });
+
   it("defines complete and unique descriptors", () => {
     expect(SETTINGS_DESCRIPTORS.length).toBeGreaterThanOrEqual(30);
     expect(SETTINGS_DESCRIPTORS_BY_ID.size).toBe(SETTINGS_DESCRIPTORS.length);
