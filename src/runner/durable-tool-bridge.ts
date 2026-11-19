@@ -1,5 +1,5 @@
 /**
- * durable-tool-bridge.ts — Adapts Pi and MCP tools to @earendil-works/pi-durable ToolRegistration.
+ * durable-tool-bridge.ts — Adapts Pi, MCP, and native durable tools to @earendil-works/pi-durable ToolRegistration.
  */
 
 import type { Context } from "@earendil-works/chord/context";
@@ -32,6 +32,7 @@ export interface BridgeToolOptions {
   onToolResult?: (result: any) => void;
   signal?: AbortSignal;
   toolContext?: unknown | ((callId: string) => unknown);
+  resolveCallId?: (toolName: string, api: any) => string | undefined;
 }
 
 export interface ExecutablePiTool {
@@ -46,6 +47,138 @@ export interface ExecutablePiTool {
     onUpdate?: (partial: any) => void,
     ctx?: any,
   ) => Promise<AgentToolResult<any>>;
+}
+
+interface ToolExecutionCoreParams {
+  toolName: string;
+  args: any;
+  api: any;
+  options: BridgeToolOptions;
+  invoke: (callId: string, updateCallback: (partial: any) => void) => Promise<unknown>;
+}
+
+async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promise<{
+  output: ToolResultMessage["content"];
+  isError: boolean;
+  details: JsonValue;
+  usage?: any;
+}> {
+  const { toolName, args, api, options, invoke } = params;
+  const callId =
+    (api as any)?.callId ??
+    options.resolveCallId?.(toolName, api) ??
+    `call-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+  if (options.beforeToolCall) {
+    const decision = await options.beforeToolCall(
+      { toolCall: { type: "toolCall", id: callId, name: toolName, arguments: args }, args },
+      options.signal,
+    );
+    if (decision?.block) {
+      throw new Error(decision.reason ?? `Tool call blocked: ${toolName}`);
+    }
+  }
+  if (options.signal?.aborted) {
+    throw new Error("Aborted");
+  }
+
+  options.onToolStart?.({
+    toolName,
+    toolCallId: callId,
+    args,
+  });
+
+  const updateCallback = (partial: any) => {
+    if (!partial) return;
+    options.onToolUpdate?.({
+      toolName,
+      toolCallId: callId,
+      args,
+      partialResult: partial,
+    });
+    if (typeof partial === "string") {
+      api?.output?.(partial);
+    } else if (typeof partial === "object") {
+      if (typeof partial.content === "string") {
+        api?.output?.(partial.content);
+      } else if (Array.isArray(partial.content)) {
+        for (const part of partial.content) {
+          if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
+            api?.output?.(part.text);
+          }
+        }
+      }
+    }
+  };
+
+  let rawResult: any;
+  try {
+    rawResult = await invoke(callId, updateCallback);
+  } catch (err: unknown) {
+    rawResult = {
+      content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
+      details: {},
+      isError: true,
+    };
+  }
+
+  const output: ToolResultMessage["content"] = Array.isArray(rawResult?.content)
+    ? (rawResult.content as ToolResultMessage["content"])
+    : typeof rawResult?.content === "string"
+      ? [{ type: "text" as const, text: rawResult.content }]
+      : Array.isArray(rawResult?.output)
+        ? (rawResult.output as ToolResultMessage["content"])
+        : typeof rawResult?.output === "string"
+          ? [{ type: "text" as const, text: rawResult.output }]
+          : typeof rawResult?.structuredOutput?.output === "string"
+            ? [{ type: "text" as const, text: rawResult.structuredOutput.output }]
+            : [];
+
+  let finalOutput = output;
+  let finalDetails = rawResult?.details ?? rawResult?.structuredOutput;
+  let finalIsError = rawResult?.isError === true;
+  let finalUsage = rawResult?.usage;
+
+  try {
+    if (options.afterToolCall) {
+      const hookResult = await options.afterToolCall(
+        {
+          toolCall: { type: "toolCall", id: callId, name: toolName, arguments: args },
+          args,
+          result: { content: output, details: finalDetails, usage: finalUsage },
+          isError: finalIsError,
+        },
+        options.signal,
+      );
+      finalOutput = hookResult?.content ?? finalOutput;
+      finalDetails = hookResult?.details ?? finalDetails;
+      finalIsError = hookResult?.isError ?? finalIsError;
+      finalUsage = hookResult?.usage ?? finalUsage;
+    }
+  } catch (err: unknown) {
+    finalOutput = [{ type: "text", text: err instanceof Error ? err.message : String(err) }];
+    finalDetails = {};
+    finalIsError = true;
+    finalUsage = undefined;
+  }
+
+  options.onToolResult?.({
+    role: "toolResult",
+    toolName,
+    toolCallId: callId,
+    content: finalOutput,
+    details: finalDetails,
+    isError: finalIsError,
+    usage: finalUsage,
+    timestamp: Date.now(),
+  });
+
+  return {
+    output: finalOutput,
+    isError: finalIsError,
+    details: finalDetails as JsonValue,
+    usage: finalUsage,
+  };
 }
 
 /**
@@ -66,128 +199,81 @@ export function bridgePiToolToDurableTool(
       ? (args: unknown) => tool.prepareArguments!(args) as object
       : undefined,
     async execute(args: any, api, _chordCtx: Context) {
-      const callId = (api as any)?.callId ?? `call-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-
-      if (options.beforeToolCall) {
-        const decision = await options.beforeToolCall(
-          { toolCall: { type: "toolCall", id: callId, name: tool.name, arguments: args }, args },
-          options.signal,
-        );
-        if (decision?.block) {
-          throw new Error(decision.reason ?? `Tool call blocked: ${tool.name}`);
-        }
-      }
-      if (options.signal?.aborted) {
-        throw new Error("Aborted");
-      }
-
-      options.onToolStart?.({
+      return executeWithToolLifecycle({
         toolName: tool.name,
-        toolCallId: callId,
         args,
+        api,
+        options,
+        invoke: (callId, updateCallback) => {
+          const effectiveToolContext =
+            typeof options.toolContext === "function"
+              ? (options.toolContext as (id: string) => unknown)(callId)
+              : options.toolContext;
+          return tool.execute(callId, args, options.signal, updateCallback, effectiveToolContext);
+        },
       });
+    },
+  });
+}
 
-      let result: AgentToolResult<JsonValue | undefined>;
-      try {
-        const updateCallback = (partial: any) => {
-          if (!partial) return;
-          options.onToolUpdate?.({
-            toolName: tool.name,
-            toolCallId: callId,
-            args,
-            partialResult: partial,
-          });
-          if (typeof partial === "string") {
-            api.output(partial);
-          } else if (typeof partial === "object") {
-            if (typeof partial.content === "string") {
-              api.output(partial.content);
-            } else if (Array.isArray(partial.content)) {
-              for (const part of partial.content) {
-                if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
-                  api.output(part.text);
-                }
-              }
-            }
-          }
-        };
-
-        const effectiveToolContext =
-          typeof options.toolContext === "function"
-            ? (options.toolContext as (id: string) => unknown)(callId)
-            : options.toolContext;
-
-        result = await tool.execute(
-          callId,
-          args,
-          options.signal,
-          updateCallback,
-          effectiveToolContext,
-        );
-      } catch (err: unknown) {
-        result = {
-          content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
-          details: {},
-          isError: true,
-        };
-      }
-
-      // Legacy tool shapes returned `output`/string `content`; keep reading them.
-      const rawResult = result as unknown as { content?: unknown; output?: unknown };
-      const output: ToolResultMessage["content"] = Array.isArray(rawResult.content)
-        ? (rawResult.content as ToolResultMessage["content"])
-        : typeof rawResult.content === "string"
-          ? [{ type: "text" as const, text: rawResult.content }]
-          : typeof rawResult.output === "string"
-            ? [{ type: "text" as const, text: rawResult.output }]
-            : Array.isArray(rawResult.output)
-              ? (rawResult.output as ToolResultMessage["content"])
-              : [];
-
-      let finalOutput = output;
-      let finalDetails = result?.details;
-      let finalIsError = result?.isError === true;
-      let finalUsage = result?.usage;
-      try {
-        if (options.afterToolCall) {
-          const hookResult = await options.afterToolCall(
-            {
-              toolCall: { type: "toolCall", id: callId, name: tool.name, arguments: args },
-              args,
-              result: { content: output, details: result?.details, usage: result?.usage },
-              isError: finalIsError,
-            },
-            options.signal,
-          );
-          finalOutput = hookResult?.content ?? finalOutput;
-          finalDetails = hookResult?.details ?? finalDetails;
-          finalIsError = hookResult?.isError ?? finalIsError;
-          finalUsage = hookResult?.usage ?? finalUsage;
-        }
-      } catch (err: unknown) {
-        finalOutput = [{ type: "text", text: err instanceof Error ? err.message : String(err) }];
-        finalDetails = {};
-        finalIsError = true;
-        finalUsage = undefined;
-      }
-
-      options.onToolResult?.({
-        role: "toolResult",
+/**
+ * Adapt a native @earendil-works/pi-durable ToolRegistration (e.g. coding tools)
+ * with the full durable tool bridge lifecycle (hooks, signal checks, event forwarding).
+ */
+export function bridgeDurableTool(
+  tool: ToolRegistration,
+  options: BridgeToolOptions = {},
+): ToolRegistration {
+  return defineTool({
+    name: tool.name,
+    description: tool.description ?? "",
+    parameters: tool.parameters,
+    replay: tool.replay,
+    prepareArguments: tool.prepareArguments
+      ? (args: unknown) => tool.prepareArguments!(args) as object
+      : undefined,
+    async execute(args: any, api, chordCtx: Context) {
+      return executeWithToolLifecycle({
         toolName: tool.name,
-        toolCallId: callId,
-        content: finalOutput,
-        details: finalDetails,
-        isError: finalIsError,
-        usage: finalUsage,
-        timestamp: Date.now(),
-      });
+        args,
+        api,
+        options,
+        invoke: async (callId) => {
+          let accumulatedOutput = "";
+          const wrappedApi = api
+            ? {
+                ...api,
+                output: (chunk: string | Uint8Array, skipped?: any) => {
+                  api.output?.(chunk, skipped);
+                  if (chunk) {
+                    const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+                    accumulatedOutput += text;
+                    options.onToolUpdate?.({
+                      toolName: tool.name,
+                      toolCallId: callId,
+                      args,
+                      partialResult: {
+                        content: [{ type: "text", text: accumulatedOutput }],
+                      },
+                    });
+                  }
+                },
+              }
+            : api;
 
-      return {
-        output: finalOutput,
-        isError: finalIsError,
-        details: finalDetails as JsonValue,
-        usage: finalUsage,
-      };
+          const res = await tool.execute(args, wrappedApi as any, chordCtx);
+          let content = res?.output ?? res?.structuredOutput;
+          if (typeof api?.retainedOutput === "function" && api.retainedOutput()?.text) {
+            content = api.retainedOutput().text;
+          } else if (accumulatedOutput && !content) {
+            content = accumulatedOutput;
+          }
+          return {
+            ...res,
+            output: content,
+          };
+        },
+      });
     },
   });
 }

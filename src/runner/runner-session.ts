@@ -71,7 +71,7 @@ import {
 import type { AgentConfig, EffectiveThinkingLevel, SubagentType } from "../types.js";
 import { clearDurableContextUsage, setDurableContextUsage } from "../usage.js";
 import { restoreBranchModel, restoreBranchThinkingLevel } from "./branch-selection.js";
-import { bridgePiToolToDurableTool } from "./durable-tool-bridge.js";
+import { bridgeDurableTool, bridgePiToolToDurableTool } from "./durable-tool-bridge.js";
 import {
   extensionCanonicalNames,
   installExtensionToolScope,
@@ -726,6 +726,56 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
 
   // Durable Registry setup
   const registry = createRegistry();
+  // Shared lifecycle handlers for durable tool bridging
+  const toolBridgeOptions = {
+    beforeToolCall: (context: any, signal?: AbortSignal) =>
+      (session as any).agent?.beforeToolCall?.(context, signal),
+    afterToolCall: (context: any, signal?: AbortSignal) =>
+      (session as any).agent?.afterToolCall?.(context, signal),
+    onToolStart: (info: { toolName: string; toolCallId: string; args: any }) => {
+      (session as any)._emit?.({
+        type: "tool_execution_start",
+        toolName: info.toolName,
+        toolCallId: info.toolCallId,
+        args: info.args,
+      });
+    },
+    onToolUpdate: (info: { toolName: string; toolCallId: string; args: any; partialResult: any }) => {
+      (session as any)._emit?.({
+        type: "tool_execution_update",
+        toolName: info.toolName,
+        toolCallId: info.toolCallId,
+        args: info.args,
+        partialResult: info.partialResult,
+      });
+    },
+    onToolResult: (resMsg: any) => {
+      session.messages.push(resMsg);
+      (session as any)._emit?.({ type: "message_start", message: resMsg });
+      (session as any)._emit?.({ type: "message_end", message: resMsg });
+      (session as any)._emit?.({
+        type: "tool_execution_end",
+        toolName: resMsg.toolName,
+        toolCallId: resMsg.toolCallId,
+        result: resMsg,
+        isError: resMsg.isError === true,
+      });
+    },
+    signal: options.signal,
+    resolveCallId: (toolName: string, api: any) => {
+      const lastAssistant =
+        (session.state?.streamingMessage?.role === "assistant" ? session.state.streamingMessage : undefined) ??
+        ([...session.messages].reverse().find((m: any) => m.role === "assistant") as any);
+      const pendingCall = lastAssistant?.content?.find(
+        (c: any) =>
+          c.type === "toolCall" &&
+          c.name === toolName &&
+          !session.messages.some((m: any) => m.role === "toolResult" && m.toolCallId === (c.id ?? c.toolUseId)),
+      );
+      return api?.callId ?? pendingCall?.id ?? pendingCall?.toolUseId;
+    },
+  };
+
   // Option B: Install CodingTools with live activity forwarding
   const rawCodingTools = [
     createReadTool(),
@@ -733,143 +783,8 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
     createEditTool(),
     createBashTool(),
   ].filter((tool) => toolNames.includes(tool.name));
-  const codingTools = rawCodingTools.map((tool) => {
-    const origExecute = tool.execute.bind(tool);
-    return {
-      ...tool,
-      execute: async (input: any, api: any, context: any) => {
-        const lastAssistant =
-          (session.state?.streamingMessage?.role === "assistant" ? session.state.streamingMessage : undefined) ??
-          ([...session.messages].reverse().find((m: any) => m.role === "assistant") as any);
-        const pendingCall = lastAssistant?.content?.find(
-          (c: any) =>
-            c.type === "toolCall" &&
-            c.name === tool.name &&
-            !session.messages.some((m: any) => m.role === "toolResult" && m.toolCallId === (c.id ?? c.toolUseId)),
-        );
-        const callId = api?.callId ?? pendingCall?.id ?? pendingCall?.toolUseId ?? `tool_${Date.now()}`;
-
-        if ((session as any).agent?.beforeToolCall) {
-          const decision = await (session as any).agent.beforeToolCall(
-            { toolCall: { type: "toolCall", id: callId, name: tool.name, arguments: input }, args: input },
-            options.signal,
-          );
-          if (decision?.block) {
-            throw new Error(decision.reason ?? `Tool call blocked: ${tool.name}`);
-          }
-        }
-        if (options.signal?.aborted) {
-          throw new Error("Aborted");
-        }
-
-        (session as any)._emit?.({ type: "tool_execution_start", toolCallId: callId, toolName: tool.name, args: input });
-
-        let accumulatedOutput = "";
-        const wrappedApi = api
-          ? {
-              ...api,
-              output: (chunk: string, skipped?: boolean) => {
-                api.output?.(chunk, skipped);
-                if (chunk) {
-                  accumulatedOutput += chunk;
-                  (session as any)._emit?.({
-                    type: "tool_execution_update",
-                    toolCallId: callId,
-                    toolName: tool.name,
-                    args: input,
-                    partialResult: {
-                      content: [{ type: "text", text: accumulatedOutput }],
-                    },
-                  });
-                }
-              },
-            }
-          : api;
-
-        let toolResult: any;
-        try {
-          let res: Awaited<ReturnType<typeof origExecute>>;
-          try {
-            res = await origExecute(input, wrappedApi, context);
-          } catch (error) {
-            res = {
-              output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
-              isError: true,
-            };
-          }
-          let content: any[] = [];
-          if (Array.isArray((res as any)?.output)) {
-            content = (res as any).output;
-          } else if (typeof (res as any)?.output === "string") {
-            content = [{ type: "text", text: (res as any).output }];
-          } else if (typeof (res as any)?.structuredOutput?.output === "string") {
-            content = [{ type: "text", text: (res as any).structuredOutput.output }];
-          } else if (typeof api?.retainedOutput === "function" && api.retainedOutput()?.text) {
-            content = [{ type: "text", text: api.retainedOutput().text }];
-          } else if (accumulatedOutput) {
-            content = [{ type: "text", text: accumulatedOutput }];
-          } else if (typeof res === "string") {
-            content = [{ type: "text", text: res }];
-          }
-
-          const details = (res as any)?.details ?? (res as any)?.structuredOutput;
-          const isError = (res as any)?.isError === true;
-          toolResult = {
-            role: "toolResult" as const,
-            toolCallId: callId,
-            toolName: tool.name,
-            content,
-            details,
-            isError,
-            usage: res?.usage,
-            timestamp: Date.now(),
-          };
-          if ((session as any).agent?.afterToolCall) {
-            const hookOverride = await (session as any).agent.afterToolCall(
-              {
-                toolCall: { type: "toolCall", id: callId, name: tool.name, arguments: input },
-                args: input,
-                result: toolResult,
-                isError,
-              },
-              options.signal,
-            );
-            toolResult.content = hookOverride?.content ?? toolResult.content;
-            toolResult.details = hookOverride?.details ?? toolResult.details;
-            toolResult.isError = hookOverride?.isError ?? toolResult.isError;
-            toolResult.usage = hookOverride?.usage ?? toolResult.usage;
-          }
-          session.messages.push(toolResult as any);
-          (session as any)._emit?.({ type: "message_start", message: toolResult });
-          (session as any)._emit?.({ type: "message_end", message: toolResult });
-          return { ...res, output: toolResult.content, details: toolResult.details, isError: toolResult.isError, usage: toolResult.usage };
-        } catch (err: any) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          toolResult = {
-            role: "toolResult" as const,
-            toolCallId: callId,
-            toolName: tool.name,
-            content: [{ type: "text", text: errorMsg }],
-            isError: true,
-            timestamp: Date.now(),
-          };
-          session.messages.push(toolResult as any);
-          (session as any)._emit?.({ type: "message_start", message: toolResult });
-          (session as any)._emit?.({ type: "message_end", message: toolResult });
-          return { output: toolResult.content, isError: true };
-        } finally {
-          (session as any)._emit?.({
-            type: "tool_execution_end",
-            toolCallId: callId,
-            toolName: tool.name,
-            result: toolResult,
-            isError: toolResult?.isError === true,
-          });
-        }
-      },
-    };
-  });
-  registry.install(defineExtension({ name: "coding-tools", tools: codingTools as any }));
+  const codingTools = rawCodingTools.map((tool) => bridgeDurableTool(tool, toolBridgeOptions));
+  registry.install(defineExtension({ name: "coding-tools", tools: codingTools }));
 
   // Extract all active session tools (MCP tools, extension tools, custom tools, nested subagent tools)
   const activeToolNames = session.getActiveToolNames();
@@ -889,40 +804,7 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
       };
       durableBridgedTools.push(
         bridgePiToolToDurableTool(toolToBridge as any, {
-          beforeToolCall: (context, signal) =>
-            (session as any).agent?.beforeToolCall?.(context, signal),
-          afterToolCall: (context, signal) =>
-            (session as any).agent?.afterToolCall?.(context, signal),
-          onToolStart: (info) => {
-            (session as any)._emit?.({
-              type: "tool_execution_start",
-              toolName: info.toolName,
-              toolCallId: info.toolCallId,
-              args: info.args,
-            });
-          },
-          onToolUpdate: (info) => {
-            (session as any)._emit?.({
-              type: "tool_execution_update",
-              toolName: info.toolName,
-              toolCallId: info.toolCallId,
-              args: info.args,
-              partialResult: info.partialResult,
-            });
-          },
-          onToolResult: (resMsg) => {
-            session.messages.push(resMsg);
-            (session as any)._emit?.({ type: "message_start", message: resMsg });
-            (session as any)._emit?.({ type: "message_end", message: resMsg });
-            (session as any)._emit?.({
-              type: "tool_execution_end",
-              toolName: resMsg.toolName,
-              toolCallId: resMsg.toolCallId,
-              result: resMsg,
-              isError: resMsg.isError === true,
-            });
-          },
-          signal: options.signal,
+          ...toolBridgeOptions,
           toolContext: (callId: string) =>
             (session as any)._extensionRunner?.createToolContext(callId, options.signal) ?? ctx,
         }),

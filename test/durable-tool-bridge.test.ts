@@ -1,6 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
-import { bridgePiToolToDurableTool, type ExecutablePiTool } from "../src/runner/durable-tool-bridge.js";
+import { bridgeDurableTool, bridgePiToolToDurableTool, type ExecutablePiTool } from "../src/runner/durable-tool-bridge.js";
 
 describe("bridgePiToolToDurableTool", () => {
   it("converts a Pi tool into a durable ToolRegistration and emits start/result events", async () => {
@@ -219,5 +220,78 @@ describe("bridgePiToolToDurableTool", () => {
     expect(capturedHookContext.toolCall.name).toBe("bash");
     expect(capturedHookContext.toolCall.arguments).toEqual(inputArgs);
     expect(capturedHookContext.toolCall.id).toBe("call-123");
+  });
+});
+
+describe("bridgeDurableTool", () => {
+  it("adapts a native ToolRegistration with full lifecycle hooks and event forwarding", async () => {
+    const starts: Array<{ toolName: string; toolCallId: string; args: unknown }> = [];
+    const updates: Array<{ toolName: string; toolCallId: string; partialResult: any }> = [];
+    const results: any[] = [];
+
+    const mockNativeTool: ToolRegistration = defineTool({
+      name: "bash",
+      description: "Run shell command",
+      parameters: { type: "object", properties: { command: { type: "string" } } },
+      replay: "unsafe",
+      async execute(_args: any, api: any) {
+        api.output("chunk1 ");
+        api.output("chunk2");
+        return {
+          output: [{ type: "text", text: "chunk1 chunk2" }],
+          details: { exitCode: 0 },
+        };
+      },
+    });
+
+    const bridged = bridgeDurableTool(mockNativeTool, {
+      onToolStart: (info) => starts.push(info),
+      onToolUpdate: (info) => updates.push(info),
+      onToolResult: (res) => results.push(res),
+    });
+
+    expect(bridged.name).toBe("bash");
+    expect(bridged.replay).toBe("unsafe");
+
+    const mockApi: any = { output: vi.fn(), callId: "bash-call-1" };
+    const res = await bridged.execute({ command: "echo hello" }, mockApi, BACKGROUND_CONTEXT);
+
+    expect(res.isError).toBe(false);
+    expect(res.output).toEqual([{ type: "text", text: "chunk1 chunk2" }]);
+    expect(starts).toHaveLength(1);
+    expect(starts[0].toolCallId).toBe("bash-call-1");
+    expect(updates).toHaveLength(2);
+    expect(updates[0].partialResult).toEqual({ content: [{ type: "text", text: "chunk1 " }] });
+    expect(updates[1].partialResult).toEqual({ content: [{ type: "text", text: "chunk1 chunk2" }] });
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      role: "toolResult",
+      toolName: "bash",
+      toolCallId: "bash-call-1",
+      isError: false,
+    });
+  });
+
+  it("handles throwing native tool and resolves custom callId", async () => {
+    const mockFailingTool: ToolRegistration = defineTool({
+      name: "write",
+      description: "Write file",
+      parameters: {},
+      replay: "unsafe",
+      async execute() {
+        throw new Error("Disk full");
+      },
+    });
+
+    const results: any[] = [];
+    const bridged = bridgeDurableTool(mockFailingTool, {
+      resolveCallId: (toolName) => `custom-${toolName}`,
+      onToolResult: (res) => results.push(res),
+    });
+
+    const res = await bridged.execute({}, { output: vi.fn() } as any, BACKGROUND_CONTEXT);
+    expect(res.isError).toBe(true);
+    expect(res.output).toEqual([{ type: "text", text: "Disk full" }]);
+    expect(results[0].toolCallId).toBe("custom-write");
   });
 });
