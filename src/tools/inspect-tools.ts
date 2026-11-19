@@ -7,12 +7,19 @@ import { getAgentConversation, SUBAGENT_TOOL_NAMES, steerAgent } from "../agent-
 import type { CompletionOutbox } from "../completion-outbox.js";
 import { formatLifetimeTokens, markdownText, textResult } from "../entry/renderers.js";
 import { consumeTerminalResult, waitForRecord } from "../manager/wait-for-record.js";
-import { formatAnswerSteer, getStatusNote, openQuestionsFooter, partialOutputSuffix } from "../status-note.js";
+import { getStatusNote, openQuestionsFooter, partialOutputSuffix } from "../status-note.js";
 import type { AgentRecord, MentionResolution } from "../types.js";
 import { formatCost, formatDuration, getDisplayName } from "../ui/agent-widget.js";
 import { getLifetimeCost, getSessionContextPercent, type PendingUsagePool } from "../usage.js";
 import { collapse } from "../workflow/progress.js";
 import type { WorkflowTask } from "../workflow/task.js";
+import {
+  answerSubagentSchema,
+  deliverQuestionAnswer,
+  getSubagentResultSchema,
+  resolveTargetQuestion,
+  shouldWaitForRecord,
+} from "./subagent-tool-core.js";
 
 export interface InspectToolsDeps {
   resolveAgentRef: (ref: string) => AgentRecord | undefined;
@@ -57,21 +64,7 @@ export function createGetResultTool(deps: InspectToolsDeps) {
     description:
       "Check status and retrieve a background agent's full result — its completion notification carries only a preview. Use the agent ID returned by Agent.",
     promptSnippet: "Check status and retrieve results from a background agent",
-    parameters: Type.Object({
-      agent_id: Type.String({
-        description: 'The agent name (e.g. "bold-curie") or ID to check. Also accepts type handles like "@explore".',
-      }),
-      wait: Type.Optional(
-        Type.Boolean({
-          description: "If true, wait for the agent to complete before returning. Default: false.",
-        }),
-      ),
-      verbose: Type.Optional(
-        Type.Boolean({
-          description: "If true, include the agent's full conversation (messages + tool calls). Default: false.",
-        }),
-      ),
-    }),
+    parameters: getSubagentResultSchema,
     execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
       const record = resolveAgentRef(params.agent_id);
       if (!record) {
@@ -98,8 +91,7 @@ export function createGetResultTool(deps: InspectToolsDeps) {
       // A terminal status can precede asynchronous worktree cleanup. Do not
       // serve or consume that result until its existing run promise settles,
       // even for a non-waiting read. Paused records must still return promptly.
-      if ((params.wait && (record.status === "running" || record.status === "queued")) ||
-        (record.worktree && record.status !== "running" && record.status !== "queued" && record.status !== "paused")) {
+      if (shouldWaitForRecord(record, params.wait)) {
         await waitForRecord(record, signal);
       }
 
@@ -266,21 +258,11 @@ export function createAnswerTool(deps: InspectToolsDeps) {
       "Answer a question one of your background agents asked via ask_parent. The answer is delivered to the (still running) agent as a steering message; " +
       "if the agent already finished, resume it with the answer instead.",
     promptSnippet: "Answer a background agent's clarification question",
-    parameters: Type.Object({
-      agent_id: Type.String({
-        description: 'The asking agent\'s name (e.g. "bold-curie") or ID, from the question card. Also accepts type handles.',
-      }),
-      question_id: Type.Optional(
-        Type.String({ description: "Which question to answer. Defaults to the agent's oldest open question." }),
-      ),
-      answer: Type.String({ description: "The decision or fact the agent asked for." }),
-    }),
+    parameters: answerSubagentSchema,
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const record = resolveAgentRef(params.agent_id);
-      const qs = record?.questions ?? [];
-      const q = params.question_id
-        ? qs.find(x => x.id === params.question_id)
-        : qs.find(x => x.state === "open" || x.state === "delivered") ?? qs[qs.length - 1];
+      const target = resolveTargetQuestion(record, params.question_id);
+      const q = target.question;
       // Top-level children answer directly; a nested child whose question was
       // routed all the way up the (blocked) chain to the main session is
       // answerable here too — delivery entitles, not just direct ownership.
@@ -288,33 +270,21 @@ export function createAnswerTool(deps: InspectToolsDeps) {
       if (!record || (!isTopLevelAgent(record) && !routed)) {
         return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
       }
-      if (!q || (q.state !== "open" && q.state !== "delivered")) {
-        const closed = !q ? ""
-          : q.state === "superseded" ? ` — it was superseded by a later ask`
-          : q.state === "dropped" ? ` — it was dropped when the run ended in failure or was aborted; it asked: "${q.question}"`
-          : ` — its state is ${q.state}`;
-        return textResult(`No open question${params.question_id ? ` "${params.question_id}"` : ""} on agent ${params.agent_id}${closed}.`);
+      if (!q) {
+        return textResult(`No open question${params.question_id ? ` "${params.question_id}"` : ""} on agent ${params.agent_id}${target.closedReason ?? ""}.`);
       }
       if (record.status !== "running" && record.status !== "queued") {
         return textResult(`Agent ${params.agent_id} already finished (${record.status}); the question rode its result. Resume it with the answer instead.`);
       }
-      const priorState = q.state;
-      q.state = "answered";
-      q.answer = params.answer;
-      q.answeredBy = "root";
-      const message = formatAnswerSteer(q);
-      try {
-        if (!record.session) {
-          record.pendingSteers = [...(record.pendingSteers ?? []), message];
-        } else {
-          await steerAgent(record.session, message);
-        }
-      } catch (err) {
-        // Delivery failed: un-answer so the question stays open for a retry.
-        q.state = priorState;
-        q.answer = undefined;
-        q.answeredBy = undefined;
-        return textResult(`Failed to deliver the answer to agent ${params.agent_id}: ${err instanceof Error ? err.message : String(err)}`);
+      const delivery = await deliverQuestionAnswer({
+        record,
+        question: q,
+        answer: params.answer,
+        answeredBy: "root",
+        steer: steerAgent,
+      });
+      if (!delivery.success) {
+        return textResult(`Failed to deliver the answer to agent ${params.agent_id}: ${delivery.error}`);
       }
       return textResult(`Answer to ${q.id} delivered to agent ${params.agent_id}.`);
     },
