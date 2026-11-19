@@ -295,3 +295,99 @@ describe("bridgeDurableTool", () => {
     expect(results[0].toolCallId).toBe("custom-write");
   });
 });
+
+describe("bridgeDurableTool full result contract", () => {
+  it("preserves structuredOutput and diagnostics from the native tool's result", async () => {
+    const structuredOutput = { kind: "read", path: "/tmp/x" };
+    const diagnostics = [{ path: "/tmp/x", line: 1 }];
+    const nativeRead: ToolRegistration = defineTool({
+      name: "read",
+      description: "Read file",
+      parameters: {},
+      replay: "safe",
+      async execute() {
+        return { output: [{ type: "text", text: "file body" }], structuredOutput, diagnostics };
+      },
+    });
+
+    const bridged = bridgeDurableTool(nativeRead);
+    const res = await bridged.execute({}, { output: vi.fn(), callId: "read-1" } as any, BACKGROUND_CONTEXT);
+
+    expect(res.output).toEqual([{ type: "text", text: "file body" }]);
+    expect(res.structuredOutput).toEqual(structuredOutput);
+    expect(res.diagnostics).toEqual(diagnostics);
+    expect(res.isError).toBe(false);
+  });
+
+  it("hands the afterToolCall hook the full toolResult message, not just content/details/usage", async () => {
+    const seen: any[] = [];
+    const nativeRead: ToolRegistration = defineTool({
+      name: "read",
+      description: "Read file",
+      parameters: {},
+      replay: "safe",
+      async execute() {
+        return { output: [{ type: "text", text: "body" }] };
+      },
+    });
+
+    const bridged = bridgeDurableTool(nativeRead, {
+      afterToolCall: async (context) => {
+        seen.push(context);
+      },
+    });
+    await bridged.execute({ path: "/tmp/x" }, { output: vi.fn(), callId: "read-full" } as any, BACKGROUND_CONTEXT);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].result).toMatchObject({
+      role: "toolResult",
+      toolCallId: "read-full",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "body" }],
+    });
+    expect(typeof seen[0].result.timestamp).toBe("number");
+  });
+
+  it("a returned output beats the retained stream, and a bare-string result still surfaces", async () => {
+    const api = () =>
+      ({ output: vi.fn(), callId: "bash-1", retainedOutput: () => ({ text: "streamed partial" }) }) as any;
+
+    const returnsOutput: ToolRegistration = defineTool({
+      name: "bash",
+      description: "Run",
+      parameters: {},
+      replay: "unsafe",
+      async execute() {
+        return { output: [{ type: "text", text: "final result" }] };
+      },
+    });
+    const withOutput = await bridgeDurableTool(returnsOutput).execute({}, api(), BACKGROUND_CONTEXT);
+    expect(withOutput.output).toEqual([{ type: "text", text: "final result" }]);
+
+    const streamsOnly: ToolRegistration = defineTool({
+      name: "bash",
+      description: "Run",
+      parameters: {},
+      replay: "unsafe",
+      async execute(_args: any, toolApi: any) {
+        toolApi.output("streamed partial");
+        return {};
+      },
+    });
+    const streamed = await bridgeDurableTool(streamsOnly).execute({}, api(), BACKGROUND_CONTEXT);
+    expect(streamed.output).toEqual([{ type: "text", text: "streamed partial" }]);
+
+    const returnsString: ToolRegistration = defineTool({
+      name: "bash",
+      description: "Run",
+      parameters: {},
+      replay: "unsafe",
+      async execute() {
+        return "bare string" as unknown as Record<string, never>;
+      },
+    });
+    const bare = await bridgeDurableTool(returnsString).execute({}, { output: vi.fn(), callId: "bash-2" } as any, BACKGROUND_CONTEXT);
+    expect(bare.output).toEqual([{ type: "text", text: "bare string" }]);
+  });
+});

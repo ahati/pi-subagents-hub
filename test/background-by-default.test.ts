@@ -15,7 +15,10 @@
  * agents bypass the pool, so the limit only started applying to ordinary
  * parallel work once background became the default.
  */
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -78,6 +81,28 @@ function spawn(tools: Map<string, any>, params: Record<string, unknown> = {}) {
 }
 
 describe("backgroundByDefault", () => {
+  // The tests boot the real extension, which loads settings from
+  // PI_CODING_AGENT_DIR: without isolation they would read — and their
+  // assertions would depend on — the user's global subagents.json (a
+  // maxConcurrent of 5 there once queued this suite's six-way fan-out).
+  let tmpAgentDir: string;
+  let originalAgentDir: string | undefined;
+
+  beforeAll(() => {
+    tmpAgentDir = mkdtempSync(join(tmpdir(), "pi-background-by-default-"));
+    originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = tmpAgentDir;
+  });
+
+  afterAll(() => {
+    if (originalAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    }
+    rmSync(tmpAgentDir, { recursive: true, force: true });
+  });
+
   it("returns an agent ID, not the result, when the call doesn't specify", async () => {
     const { pi, tools } = makePi();
     subagentsExtension(pi);

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -11,6 +11,7 @@ import {
   SETTINGS_DESCRIPTORS_BY_ID,
   type SettingsMenuDeps,
 } from "../src/commands/settings-descriptors.js";
+import { setPackageAgentsGate } from "../src/package-resources.js";
 
 function makeMockDeps(): SettingsMenuDeps {
   return {
@@ -25,7 +26,7 @@ function makeMockDeps(): SettingsMenuDeps {
     } as any,
     widget: {} as any,
     fleet: {} as any,
-    scheduler: {} as any,
+    scheduler: { stop: vi.fn() } as any,
     reloadCustomAgents: vi.fn(),
     getStrictAgentFiles: vi.fn(() => false),
     setStrictAgentFiles: vi.fn(),
@@ -89,7 +90,7 @@ describe("settings-descriptors", () => {
   });
 
   it("defines complete and unique descriptors", () => {
-    expect(SETTINGS_DESCRIPTORS.length).toBeGreaterThanOrEqual(30);
+    expect(SETTINGS_DESCRIPTORS.length).toBe(31);
     expect(SETTINGS_DESCRIPTORS_BY_ID.size).toBe(SETTINGS_DESCRIPTORS.length);
 
     const ids = new Set<string>();
@@ -153,12 +154,90 @@ describe("settings-descriptors", () => {
   });
 
   it("evaluates gate helpers correctly", () => {
+    // An undefined gate is the fresh-config default and must read as "on",
+    // exactly like an explicit true.
+    expect(gateAdmitsAnything(undefined)).toBe(true);
     expect(gateAdmitsAnything(true)).toBe(true);
     expect(gateAdmitsAnything(false)).toBe(false);
     expect(gateAdmitsAnything(["pkg-1"])).toBe(true);
     expect(gateAdmitsAnything([])).toBe(false);
 
-    expect(describeGateSetting(true, "Base")).toContain("on = all packages");
-    expect(describeGateSetting(["pkg-1"], "Base")).toContain("Constrained by a list in settings (pkg-1)");
+    expect(describeGateSetting(true, "Base")).toBe("Base");
+    expect(describeGateSetting(undefined, "Base")).toBe("Base");
+    expect(describeGateSetting(["pkg-1"], "Base")).toContain("Currently limited to: pkg-1.");
+    expect(describeGateSetting([], "Base")).toContain("Currently limited to an empty list, so nothing loads.");
+  });
+
+  it("stops the scheduler and short-circuits when scheduling is already off", () => {
+    const desc = SETTINGS_DESCRIPTORS_BY_ID.get("schedulingEnabled")!;
+    const deps = makeMockDeps();
+    const ctx = makeMockCtx();
+
+    desc.apply("off", ctx, deps);
+    expect(deps.setSchedulingEnabled).toHaveBeenCalledWith(false);
+    expect(deps.scheduler.stop).toHaveBeenCalledTimes(1);
+    expect(deps.pi.events.emit).toHaveBeenCalledWith("subagents:settings_changed", expect.anything());
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Scheduling disabled. Tool spec change takes effect on next pi session"),
+      expect.any(String),
+    );
+
+    // Applying the same state again is a no-op: one info toast, no stop, no write.
+    vi.mocked(deps.isSchedulingEnabled).mockReturnValue(false);
+    const emitCalls = vi.mocked(deps.pi.events.emit).mock.calls.length;
+    desc.apply("off", ctx, deps);
+    expect(deps.scheduler.stop).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.pi.events.emit).mock.calls.length).toBe(emitCalls);
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Scheduling already disabled.", "info");
+  });
+
+  it("short-circuits when workflows are already in the requested state", () => {
+    const desc = SETTINGS_DESCRIPTORS_BY_ID.get("workflowsEnabled")!;
+    const deps = makeMockDeps();
+    const ctx = makeMockCtx();
+
+    desc.apply("on", ctx, deps);
+    expect(deps.setWorkflowsEnabled).not.toHaveBeenCalled();
+    expect(deps.pi.events.emit).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Workflows already enabled.", "info");
+  });
+
+  it("warns when toggling package agents replaces a configured allowlist", () => {
+    const desc = SETTINGS_DESCRIPTORS_BY_ID.get("packageAgents")!;
+    setPackageAgentsGate(["pkg-a", "pkg-b"]);
+    try {
+      const deps = makeMockDeps();
+      const ctx = makeMockCtx();
+      desc.apply("on", ctx, deps);
+      expect(deps.reloadCustomAgents).toHaveBeenCalled();
+      expect(ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("Replaced the allowlist (pkg-a, pkg-b)"),
+        expect.any(String),
+      );
+    } finally {
+      setPackageAgentsGate(undefined);
+    }
+  });
+
+  it("reloads custom agents when the package workflows gate changes", () => {
+    const desc = SETTINGS_DESCRIPTORS_BY_ID.get("packageWorkflows")!;
+    const deps = makeMockDeps();
+    const ctx = makeMockCtx();
+    desc.apply("on", ctx, deps);
+    expect(deps.reloadCustomAgents).toHaveBeenCalled();
+  });
+
+  it("persists maxSubagentDepth to the settings file when applied", () => {
+    const desc = SETTINGS_DESCRIPTORS_BY_ID.get("maxSubagentDepth")!;
+    const deps = makeMockDeps();
+    const ctx = makeMockCtx();
+
+    desc.apply("4", ctx, deps);
+
+    // saveSettings rewrites subagents.json from the menu snapshot wholesale;
+    // a key missing from the snapshot is erased. maxSubagentDepth must ride
+    // along or the setting reverts to its default on the next session.
+    const saved = JSON.parse(readFileSync(join(tmpGlobalDir, "subagents.json"), "utf-8"));
+    expect(saved.maxSubagentDepth).toBe(4);
   });
 });

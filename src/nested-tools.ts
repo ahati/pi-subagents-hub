@@ -28,7 +28,7 @@ import {
 import { resolveResumeTurnLimit } from "./runner/runner-settings.js";
 import { formatQuestionCard, getForegroundOutcomeNote, getStatusNote, openQuestionsFooter, partialOutputSuffix } from "./status-note.js";
 import {
-  answerSubagentSchema,
+  answerNestedSchema,
   deliverQuestionAnswer,
   getNestedResultSchema,
   queueOrSteerAgent,
@@ -625,7 +625,7 @@ export function createAskAnswerTools(context: AskAnswerContext): ToolDefinition[
     name: NESTED_TOOL_NAMES[4],
     label: "Answer Nested Agent",
     description: "Answer a question one of your nested agents asked via ask_parent. The answer is delivered to the (still running) agent as a steering message.",
-    parameters: answerSubagentSchema,
+    parameters: answerNestedSchema,
     execute: async (_toolCallId, params) => {
       const record = context.manager.getRecord(params.agent_id);
       const target = resolveTargetQuestion(record, params.question_id);

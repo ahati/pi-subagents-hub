@@ -4,7 +4,28 @@ import * as path from "node:path";
 import { TuiTest } from "@microsoft/tui-test";
 import { describe, expect, it } from "vitest";
 
-describe("FleetView interactive TUI e2e with faux provider", () => {
+/**
+ * The suite drives a real `pi` session through a PTY. `npm run test` puts
+ * `node_modules/.bin` on PATH, and the @earendil-works/pi-coding-agent
+ * dependency ships the `pi` CLI there, so CI resolves it without a global
+ * install. The scan only guards invocations without that PATH entry (a bare
+ * `vitest` from another directory); it checks for the file rather than
+ * spawning `pi --version` to stay cheap and side-effect-free.
+ */
+function piBinaryAvailable(): boolean {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue;
+    try {
+      fs.accessSync(path.join(dir, "pi"), fs.constants.X_OK);
+      return true;
+    } catch {
+      // keep scanning
+    }
+  }
+  return false;
+}
+
+describe.skipIf(!piBinaryAvailable())("FleetView interactive TUI e2e with faux provider", () => {
   it(
     "renders fleet view, navigates with Left arrow, dismisses with Right, and auto-expands on agent addition",
     async () => {

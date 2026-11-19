@@ -35,6 +35,7 @@ import {
 import type { SubagentScheduler } from "../schedule.js";
 import {
   MAX_HEADLESS_WAIT_MINUTES,
+  type SubagentsSettings,
   saveAndEmitChanged,
   type ToolDescriptionMode,
 } from "../settings.js";
@@ -109,15 +110,16 @@ export interface SettingDescriptor {
 }
 
 export function gateAdmitsAnything(gate: ReturnType<typeof getPackageAgentsGate>): boolean {
-  if (typeof gate === "boolean") return gate;
-  return Array.isArray(gate) && gate.length > 0;
+  if (gate === undefined || gate === true) return true;
+  if (gate === false) return false;
+  return gate.length > 0;
 }
 
 export function describeGateSetting(gate: ReturnType<typeof getPackageAgentsGate>, base: string): string {
-  if (Array.isArray(gate)) {
-    return `${base} Constrained by a list in settings (${gate.join(", ")}): toggle here to on (allow all) or off (none).`;
-  }
-  return `${base} (on = all packages with declared agents, off = none)`;
+  if (!Array.isArray(gate)) return base;
+  return gate.length > 0
+    ? `${base} Currently limited to: ${gate.join(", ")}.`
+    : `${base} Currently limited to an empty list, so nothing loads.`;
 }
 
 export function snapshotSettings(deps: SettingsMenuDeps) {
@@ -135,6 +137,7 @@ export function snapshotSettings(deps: SettingsMenuDeps) {
     backgroundByDefault: deps.getBackgroundByDefault(),
     schedulingEnabled: deps.isSchedulingEnabled(),
     workflowsEnabled: deps.isWorkflowsPinned() ? deps.isWorkflowsEnabled() : undefined,
+    maxSubagentDepth: getMaxSubagentDepth(),
     packageAgents: getPackageAgentsGate(),
     packageWorkflows: getPackageWorkflowsGate(),
     scopeModels: isScopeModelsEnabled(),
@@ -156,8 +159,17 @@ export function snapshotSettings(deps: SettingsMenuDeps) {
     workflowReference: deps.getWorkflowReference(),
     toolDescriptionMode: deps.getToolDescriptionMode(),
     uncutPromptProviders: defaultUncut ? undefined : uncutPromptProviders,
-  };
+  } satisfies SubagentsSettings;
 }
+
+// Compile-time guard: every SubagentsSettings key must be snapshotted, or a
+// menu save would silently erase the missing one from subagents.json.
+type _NoMissingSettingsKeys =
+  Exclude<keyof SubagentsSettings, keyof ReturnType<typeof snapshotSettings>> extends never
+    ? true
+    : ["snapshotSettings() is missing a SubagentsSettings key"];
+const _settingsSnapshotIsComplete: _NoMissingSettingsKeys = true;
+void _settingsSnapshotIsComplete;
 
 export function notifyApplied(
   ctx: ExtensionCommandContext,
@@ -359,12 +371,15 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     getCurrent: (deps) => (deps.isSchedulingEnabled() ? "on" : "off"),
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
+      if (enabled === deps.isSchedulingEnabled()) {
+        ctx.ui.notify(`Scheduling already ${enabled ? "enabled" : "disabled"}.`, "info");
+        return;
+      }
       deps.setSchedulingEnabled(enabled);
+      if (!enabled) deps.scheduler.stop();
       notifyApplied(
         ctx,
-        enabled
-          ? "Subagent scheduling enabled (applies on the next pi session)"
-          : "Subagent scheduling disabled (removes `schedule` param from Agent on the next pi session)",
+        `Scheduling ${enabled ? "enabled" : "disabled"}. Tool spec change takes effect on next pi session.`,
         deps,
       );
     },
@@ -378,12 +393,14 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     getCurrent: (deps) => (deps.isWorkflowsEnabled() ? "on" : "off"),
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
+      if (enabled === deps.isWorkflowsEnabled()) {
+        ctx.ui.notify(`Workflows already ${enabled ? "enabled" : "disabled"}.`, "info");
+        return;
+      }
       deps.setWorkflowsEnabled(enabled);
       notifyApplied(
         ctx,
-        enabled
-          ? "Workflows enabled (applies on the next pi session)"
-          : "Workflows disabled (keeps SubagentWorkflow out of the tool spec on the next pi session)",
+        `Workflows ${enabled ? "enabled" : "disabled"}. Tool spec change takes effect on next pi session.`,
         deps,
       );
     },
@@ -399,13 +416,15 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     getCurrent: () => (gateAdmitsAnything(getPackageAgentsGate()) ? "on" : "off"),
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
+      const previous = getPackageAgentsGate();
       setPackageAgentsGate(enabled);
       deps.reloadCustomAgents();
+      const replaced = Array.isArray(previous) && previous.length > 0
+        ? ` Replaced the allowlist (${previous.join(", ")}) — re-add it in .pi/subagents.json to narrow it again.`
+        : "";
       notifyApplied(
         ctx,
-        enabled
-          ? "Package agents enabled — declared agents from installed packages will be loaded"
-          : "Package agents disabled — declared agents from installed packages will be ignored",
+        `Package agents ${enabled ? "enabled" : "disabled"}.${replaced} Tool spec change takes effect on next pi session.`,
         deps,
       );
     },
@@ -421,14 +440,13 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     getCurrent: () => (gateAdmitsAnything(getPackageWorkflowsGate()) ? "on" : "off"),
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
+      const previous = getPackageWorkflowsGate();
       setPackageWorkflowsGate(enabled);
-      notifyApplied(
-        ctx,
-        enabled
-          ? "Package workflows enabled — declared workflows from installed packages will be resolved"
-          : "Package workflows disabled — declared workflows from installed packages will be ignored",
-        deps,
-      );
+      deps.reloadCustomAgents();
+      const replaced = Array.isArray(previous) && previous.length > 0
+        ? ` Replaced the allowlist (${previous.join(", ")}) — re-add it in .pi/subagents.json to narrow it again.`
+        : "";
+      notifyApplied(ctx, `Package workflows ${enabled ? "enabled" : "disabled"}.${replaced}`, deps);
     },
   },
   {
@@ -439,13 +457,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
       setScopeModelsEnabled(enabled);
-      notifyApplied(
-        ctx,
-        enabled
-          ? "Scope models enabled: subagent models will be validated against scoped models"
-          : "Scope models disabled: subagents may use any model",
-        deps,
-      );
+      notifyApplied(ctx, `Scope models ${enabled ? "enabled" : "disabled"}`, deps);
     },
   },
   {
@@ -458,9 +470,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
       deps.setStrictAgentFiles(enabled);
       notifyApplied(
         ctx,
-        enabled
-          ? "Strict agent files enabled: invalid agent definitions will fail startup"
-          : "Strict agent files disabled: invalid agent definitions will be skipped with a warning",
+        `Strict agent files ${enabled ? "enabled" : "disabled"}. Takes effect on next pi session.`,
         deps,
       );
     },
@@ -473,12 +483,9 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
       deps.setDisableDefaultAgents(enabled);
-      deps.reloadCustomAgents();
       notifyApplied(
         ctx,
-        enabled
-          ? "Built-in agents disabled (only custom agents available)"
-          : "Built-in agents enabled (general-purpose, Explore, Plan)",
+        `Default agents ${enabled ? "disabled" : "enabled"}. Tool spec change takes effect on next pi session.`,
         deps,
       );
     },
@@ -490,13 +497,12 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     getValues: () => [...new Set([...getAvailableTypes(), NO_FALLBACK])],
     getCurrent: () => getFallbackSubagent() ?? "general-purpose",
     apply: (value, ctx, deps) => {
-      const target = value === NO_FALLBACK ? "none" : value;
-      setFallbackSubagent(target);
+      setFallbackSubagent(value);
       notifyApplied(
         ctx,
-        target === "none"
-          ? "Strict dispatch: unknown agent types will be rejected"
-          : `Fallback agent set to "${target}"`,
+        value === NO_FALLBACK
+          ? "Unknown or disabled agent types will now be rejected"
+          : `Unknown agent types will fall back to ${value}`,
         deps,
       );
     },
@@ -509,11 +515,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
       setOutputTranscriptDefault(enabled);
-      notifyApplied(
-        ctx,
-        enabled ? "Output transcript default enabled" : "Output transcript default disabled",
-        deps,
-      );
+      notifyApplied(ctx, `Output transcript ${enabled ? "enabled" : "disabled"} by default`, deps);
     },
   },
   {
@@ -541,7 +543,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
       setWorktreeIsolationEnabled(enabled);
       notifyApplied(
         ctx,
-        enabled ? "Worktree isolation enabled" : "Worktree isolation disabled (applies on next pi session)",
+        `Worktree isolation ${enabled ? "enabled" : "disabled"}. Tool parameter updates on next pi session.`,
         deps,
       );
     },
@@ -552,18 +554,17 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     description: () =>
       `Seconds git may take to create an isolated worktree (${MIN_WORKTREE_TIMEOUT_SECONDS}-${MAX_WORKTREE_TIMEOUT_SECONDS}, default 30; raise it for a large repo, Enter to type)`,
     isNumeric: true,
+    // Master renders the same label from MIN/MAX_WORKTREE_TIMEOUT_SECONDS
+    // inside a lazily-built menu; this registry evaluates at module load, so
+    // the bounds are spelled out - a partial worktree.js mock that omits the
+    // constants must not break importing this module.
     numericPromptLabel: "Worktree timeout (30-3600 seconds)",
     getCurrent: () => String(getWorktreeTimeoutSeconds()),
     apply: (value, ctx, deps) => {
       const n = parseInt(value, 10);
-      if (n >= MIN_WORKTREE_TIMEOUT_SECONDS && n <= MAX_WORKTREE_TIMEOUT_SECONDS) {
+      if (Number.isInteger(n) && n >= MIN_WORKTREE_TIMEOUT_SECONDS && n <= MAX_WORKTREE_TIMEOUT_SECONDS) {
         setWorktreeTimeoutSeconds(n);
-        notifyApplied(ctx, `Worktree checkout timeout set to ${n}s`, deps);
-      } else {
-        ctx.ui.notify(
-          `Worktree timeout must be ${MIN_WORKTREE_TIMEOUT_SECONDS}-${MAX_WORKTREE_TIMEOUT_SECONDS} seconds`,
-          "warning",
-        );
+        notifyApplied(ctx, `Worktree timeout set to ${getWorktreeTimeoutSeconds()}s`, deps);
       }
     },
   },
@@ -579,8 +580,8 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
       notifyApplied(
         ctx,
         enabled
-          ? "Usage reporting enabled: subagent tokens and cost will be reported to this session"
-          : "Usage reporting disabled: subagent tokens and cost will not be reported to this session",
+          ? "Subagent usage now counted in this session's totals"
+          : "Subagent usage no longer counted in this session's totals",
         deps,
       );
     },
@@ -594,7 +595,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
       deps.setShowCost(enabled);
-      notifyApplied(ctx, enabled ? "Estimated cost display enabled" : "Estimated cost display disabled", deps);
+      notifyApplied(ctx, `Cost display ${enabled ? "enabled" : "disabled"}`, deps);
     },
   },
   {
@@ -606,13 +607,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
       deps.setShowModel(enabled);
-      notifyApplied(
-        ctx,
-        enabled
-          ? "Model and thinking display enabled on widget and fleet view rows"
-          : "Model and thinking display disabled on widget and fleet view rows",
-        deps,
-      );
+      notifyApplied(ctx, `Model display ${enabled ? "enabled" : "disabled"}`, deps);
     },
   },
   {
@@ -630,7 +625,9 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
   {
     id: "viewerStyle",
     label: "Viewer style",
-    description: "Visual style for conversation viewer: chat (rendered message bubbles) or compact (traditional density with message metadata)",
+    description:
+      "Conversation viewer transcript: chat = pi's main-screen message components, like main-chat output (default); "
+      + "compact = the original flat transcript with [User]/[Assistant] labels, dim thinking previews and capped tool output",
     getValues: () => ["chat", "compact"],
     getCurrent: (deps) => deps.getViewerStyle(),
     apply: (value, ctx, deps) => {
@@ -642,7 +639,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
   {
     id: "fleetView",
     label: "Fleet view",
-    description: "Live agent roster in the editor footer: agent status, duration, tokens, cost (off = widget only)",
+    description: "Claude Code-style main+subagents list below the editor (↓/← to navigate, Enter to view)",
     getCurrent: (deps) => (deps.isFleetViewEnabled() ? "on" : "off"),
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
@@ -652,10 +649,9 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
   },
   {
     id: "agentMentions",
-    label: "Agent mentions (@agent)",
-    description:
-      "How @agent mentions in user messages are handled: model = an agent conversation clone starts the agent with no visible tool call; direct = the agent starts immediately, no model turn; off = disable mentions",
-    getValues: () => ["off", "model", "direct"],
+    label: "Agent mentions",
+    description: "Route `@handle message` at the prompt to that agent. model = an off-screen clone of this conversation calls the Agent tool, so the agent gets a context-written prompt, a transcript and per-tool detail, and the chat stays clean; direct = started here from your text, no model call. Messaging and resuming are direct either way.",
+    getValues: () => ["model", "direct", "off"],
     getCurrent: (deps) => deps.getAgentMentionMode(),
     apply: (value, ctx, deps) => {
       const mode = value as AgentMentionMode;
@@ -674,7 +670,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
   {
     id: "rememberAgents",
     label: "Remember agents",
-    description: "Save agent definitions in session entries so resumes work after restart/reload",
+    description: "Persist subagent sessions so `@handle` can resume one long after it finished (they also appear in /resume)",
     getCurrent: () => (getRememberAgents() ? "on" : "off"),
     apply: (value, ctx, deps) => {
       const enabled = value === "on";
@@ -684,7 +680,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
   },
   {
     id: "toolDescriptionMode",
-    label: "Tool description mode",
+    label: "Tool description",
     description:
       "Agent tool description sent to the LLM: full (rich, default), compact (~75% fewer tokens, for small/local models), or custom (.pi/agent-tool-description.md with {{placeholders}})",
     getValues: () => ["full", "compact", "custom"],
@@ -692,7 +688,7 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     apply: (value, ctx, deps) => {
       const mode = value as ToolDescriptionMode;
       deps.setToolDescriptionMode(mode);
-      notifyApplied(ctx, `Tool description mode set to ${mode} (applies on next pi session)`, deps);
+      notifyApplied(ctx, `Tool description set to ${mode}. Takes effect on next pi session.`, deps);
     },
   },
 ];

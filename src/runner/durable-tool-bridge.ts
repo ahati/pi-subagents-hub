@@ -55,6 +55,14 @@ interface ToolExecutionCoreParams {
   api: any;
   options: BridgeToolOptions;
   invoke: (callId: string, updateCallback: (partial: any) => void) => Promise<unknown>;
+  /**
+   * The coding-tools result contract: the afterToolCall hook receives the
+   * full toolResult message (role, toolCallId, toolName, timestamp — not just
+   * content/details/usage), and the return spreads the raw result so fields
+   * like `structuredOutput` and `diagnostics` survive for codemode
+   * `executeTool()` callers. Pi/MCP/nested tools keep the reduced contract.
+   */
+  fullResult?: boolean;
 }
 
 async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promise<{
@@ -63,7 +71,7 @@ async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promis
   details: JsonValue;
   usage?: any;
 }> {
-  const { toolName, args, api, options, invoke } = params;
+  const { toolName, args, api, options, invoke, fullResult } = params;
   const callId =
     (api as any)?.callId ??
     options.resolveCallId?.(toolName, api) ??
@@ -139,13 +147,26 @@ async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promis
   let finalIsError = rawResult?.isError === true;
   let finalUsage = rawResult?.usage;
 
+  const toolResultMessage = {
+    role: "toolResult" as const,
+    toolCallId: callId,
+    toolName,
+    content: output,
+    details: finalDetails,
+    isError: finalIsError,
+    usage: finalUsage,
+    timestamp: Date.now(),
+  };
+
   try {
     if (options.afterToolCall) {
       const hookResult = await options.afterToolCall(
         {
           toolCall: { type: "toolCall", id: callId, name: toolName, arguments: args },
           args,
-          result: { content: output, details: finalDetails, usage: finalUsage },
+          result: fullResult
+            ? toolResultMessage
+            : { content: output, details: finalDetails, usage: finalUsage },
           isError: finalIsError,
         },
         options.signal,
@@ -173,12 +194,13 @@ async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promis
     timestamp: Date.now(),
   });
 
-  return {
+  const finalized = {
     output: finalOutput,
     isError: finalIsError,
     details: finalDetails as JsonValue,
     usage: finalUsage,
   };
+  return fullResult ? { ...rawResult, ...finalized } : finalized;
 }
 
 /**
@@ -238,6 +260,7 @@ export function bridgeDurableTool(
         args,
         api,
         options,
+        fullResult: true,
         invoke: async (callId) => {
           let accumulatedOutput = "";
           const wrappedApi = api
@@ -262,11 +285,28 @@ export function bridgeDurableTool(
             : api;
 
           const res = await tool.execute(args, wrappedApi as any, chordCtx);
-          let content = res?.output ?? res?.structuredOutput;
-          if (typeof api?.retainedOutput === "function" && api.retainedOutput()?.text) {
-            content = api.retainedOutput().text;
-          } else if (accumulatedOutput && !content) {
-            content = accumulatedOutput;
+          // Master's coding-tools chain: a returned output wins, the retained
+          // stream only when nothing came back, accumulated output next, and a
+          // bare-string result last.
+          // `structuredOutput` is JsonValue; only its object form can carry the
+          // nested `output` string the chain reads.
+          const structured: { output?: unknown } | undefined =
+            typeof res?.structuredOutput === "object" && res.structuredOutput !== null && !Array.isArray(res.structuredOutput)
+              ? res.structuredOutput
+              : undefined;
+          let content: ToolResultMessage["content"] = [];
+          if (Array.isArray(res?.output)) {
+            content = res.output;
+          } else if (typeof res?.output === "string") {
+            content = [{ type: "text" as const, text: res.output }];
+          } else if (typeof structured?.output === "string") {
+            content = [{ type: "text" as const, text: structured.output }];
+          } else if (typeof api?.retainedOutput === "function" && api.retainedOutput()?.text) {
+            content = [{ type: "text" as const, text: api.retainedOutput().text }];
+          } else if (accumulatedOutput) {
+            content = [{ type: "text" as const, text: accumulatedOutput }];
+          } else if (typeof res === "string") {
+            content = [{ type: "text" as const, text: res }];
           }
           return {
             ...res,

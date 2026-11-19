@@ -52,6 +52,21 @@ export const answerSubagentSchema = Type.Object({
   answer: Type.String({ description: "The decision or fact the agent asked for." }),
 });
 
+/**
+ * The nested `answer_subagent` tool's parameters: nested children have no
+ * handles and resolve by record ID only, so the description must not promise
+ * name/type-handle resolution the way the top-level tool's does.
+ */
+export const answerNestedSchema = Type.Object({
+  agent_id: Type.String({
+    description: "The asking agent's ID, from the question card.",
+  }),
+  question_id: Type.Optional(
+    Type.String({ description: "Defaults to the agent's oldest open question." }),
+  ),
+  answer: Type.String({ description: "The decision or fact the agent asked for." }),
+});
+
 export function shouldWaitForRecord(record: AgentRecord, waitRequested = false): boolean {
   return (
     (waitRequested && (record.status === "running" || record.status === "queued")) ||
@@ -160,6 +175,14 @@ export type ResolveAndScopeModelResult =
   | { success: true; model: Model<any> | undefined }
   | { success: false; error: string };
 
+/**
+ * Resolve the model for a spawn and enforce the scopeModels policy.
+ *
+ * Gates on `modelInput !== undefined` — host.ts's original semantics. The
+ * Agent tool and nested spawns previously skipped resolution for a falsy
+ * (empty-string) input; an explicit empty `model` from the caller now
+ * resolves and reports instead of silently falling back.
+ */
 export function resolveAndScopeModel(opts: ResolveAndScopeModelOptions): ResolveAndScopeModelResult {
   let model: Model<any> | undefined = opts.fallbackModel;
   if (opts.modelInput !== undefined) {

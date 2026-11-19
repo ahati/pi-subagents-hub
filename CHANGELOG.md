@@ -11,8 +11,9 @@ check the entries below for behaviour changes.
 
 ### Fixed
 
-- **FleetView Left-arrow navigation and auto-expansion on item changes.** Restored Left-arrow key activation for the below-editor FleetView at an empty prompt and updated auto-expansion to monitor both agent and workflow changes. Fixed setting-descriptor test suite isolation so test runs no longer pollute global `subagents.json` with disabled `fleetView`.
-
+- **FleetView auto-expansion now tracks workflow runs, not just agents.** A bar dismissed with → re-expands on its own when a workflow run appears (new agents already did). The `←` activator at an empty prompt is unchanged from before.
+- **Headless wait setting row is now editable.** `Headless wait (min)` advertised "Enter to type" but the menu never opened an input for it, leaving the row a no-op; Enter now opens the numeric prompt.
+- **Settings tests no longer read the user's global config.** `settings-descriptors`, `background-by-default` and `wait-queued` boot the real extension and now isolate `PI_CODING_AGENT_DIR` in temp dirs, so `npm run test` stays hermetic on machines whose `~/.pi/agent/subagents.json` departs from the defaults.
 
 ## [2026.11.191] - 2026-11-19
 
