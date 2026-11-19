@@ -774,6 +774,8 @@ Settings and agent files follow the **active session's** project root, not the d
 
 **Tool exposure** (`toolExposure`, default `direct`): a file-only setting controlling how the model reaches this extension's two orchestration tools. `direct` declares `Agent` and `SubagentWorkflow` on every turn, schema and description included. `deferred` leaves them out of the default tool set, so pi's built-in `tool_search` finds and activates one only on a turn that needs it — the Agent tool's description is the largest single item in this extension's per-turn tool payload. The saving is workload-dependent: a session that does end up delegating pays a `tool_search` round trip, which can cost more than the declaration it avoided, so benchmark it against your own use. `tool_search` must be enabled (`"defaultTools": ["+tool_search"]`); without it, deferred tools are unreachable and a warning is written at `session_start`. Read once at tool registration, so a change applies on the next pi session. Agent mentions in `model` mode ride the Agent tool and therefore also depend on `tool_search` under `deferred`; use `agentMentions: "direct"` or `direct` exposure if that matters.
 
+**Required extensions** (`requiredExtensions`, file-only, read from the global file only): handler-only extensions loaded into every subagent session, whatever the agent's own `extensions` / `exclude_extensions` say and `isolated: true` included, while their tools stay out of the child's tool scope. Use it for machine-level policy a project must not be able to weaken — logging, guardrails. Entries resolve against `~/.pi/agent` unless absolute or `~/`-prefixed, and a copy of the list in a project file is dropped. A malformed global file, a missing extension or one that fails to bind fails the spawn with the reason, instead of running the child without the policy.
+
 **Filter:** the Settings page has a filter line above the rows. Type to narrow the list by label, `↑`/`↓` move within the matches, and Enter on a numeric row opens that row's editor. Esc closes the page; Backspace edits the filter.
 
 **Nested depth** (`maxSubagentDepth`, default `2`): the hard ceiling on [nested delegation](#nested-subagents), counted from the main session (main = 0, its subagents = 1). `0` or `1` disables nested subagents entirely, even for agents that set `allowed_subagents` — see the [depth table](#nested-subagents). Read when a subagent session is built, so a change applies to agents started after it.
@@ -1152,6 +1154,8 @@ This is useful for creating agents that inherit extension tools but should not h
 docs/                 # Long-form guides (shipped to npm; README links out to them)
   workflows.md        # SubagentWorkflow: writing, editing, saving and re-running scripts
   rpc.md              # Cross-extension integration: pi.events, subagents:rpc:*, manager registry
+skills/
+  workflow-authoring/SKILL.md # The script-writing reference, shipped when workflowReference is "skill"
 examples/
   workflows/          # Runnable examples, executed by test/workflow-examples.test.ts
   agent-tool-description.md
@@ -1159,6 +1163,8 @@ test/                 # vitest suite; e2e/ and perf/ subdirectories
 src/
   index.ts            # Extension entry: tool/command registration, /agents menu, rendering
   types.ts            # Type definitions (AgentConfig, AgentRecord, etc.)
+  subagent-info.ts    # The SubagentInfo shape completion events and the get/list RPCs send
+  workflow-info.ts    # WorkflowInfo / WorkflowDetail shapes for a run's events and channels
 
   # Agent registry
   default-agents.ts   # Embedded default agent configs (general-purpose, Explore, Plan)
@@ -1176,6 +1182,7 @@ src/
     durable-tool-bridge.ts # Adapts Pi extension tools, MCP servers, and nested tools to durable ToolRegistration
     durable-runner.ts # Durable runner interface and type exports
     runner-types.ts   # Session runner options, state, and dependency interfaces
+    branch-selection.ts # The model and thinking level a saved session branch records
   agent-manager.ts    # Agent lifecycle, concurrency queue, completion notifications
   nested-tools.ts     # Delegation tools handed to subagents (nested spawn/collect/steer)
   child-context.ts    # AsyncLocalStorage flag marking work done for a child session
@@ -1194,7 +1201,7 @@ src/
   model-scope.ts      # scopeModels allowlist policy, shared by top-level and nested tools
   mention.ts          # `@handle message` grammar: suggestion triggers and send parsing
   mention-clone.ts    # Run a mention's turn in a cloned conversation, off the main chat
-  cross-extension-rpc.ts # ping/spawn/stop/pause/resume/consume/steer RPC handlers over pi.events
+  cross-extension-rpc.ts # ping/spawn/stop/pause/resume/consume/steer/get/list/workflow_get/workflow_list RPC handlers over pi.events
 
   # Scheduling
   schedule.ts         # SubagentScheduler: cron / +10m / interval / ISO dispatch

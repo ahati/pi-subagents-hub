@@ -9,6 +9,8 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+## [2026.11.191] - 2026-11-19
+
 > **⚠️ Behavior change — the `subagents:rpc:stop` reply can arrive up to 5 s later** ([#443](https://github.com/tintinweb/pi-subagents/issues/443)). It now waits until the stopped agent and every agent below it have finished, and returns `{ settled }`. A caller whose stop timeout is under 5 s should raise it, or pass a smaller `settleTimeoutMs`.
 
 
