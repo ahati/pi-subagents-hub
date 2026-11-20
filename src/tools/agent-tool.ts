@@ -450,6 +450,13 @@ export function createAgentTool(deps: AgentToolDeps) {
           if (rec?.outputFile) {
             rec.outputCleanup = streamToOutputFile(session as any, rec.outputFile, id, ctx.cwd, transcriptAnchor(session as AgentSession));
           }
+          // The session exists now, so the record clears the roster's
+          // `a.session` eligibility filter — this is the moment the agent
+          // becomes fleet-visible. The spawn-time notify ran before the
+          // session existed; on an otherwise empty roster that call clears
+          // the tick timer, so nothing else would ever notice this one.
+          fleet.ensureTimer();
+          fleet.update();
         };
 
         id = manager.spawn(pi, ctx, subagentType, params.prompt as string, {

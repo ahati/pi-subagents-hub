@@ -11,6 +11,8 @@ check the entries below for behaviour changes.
 
 ### Fixed
 
+- **Fleet bar now opens when a background agent starts running.** A spawn into an otherwise empty session notified the fleet before the child session existed — the roster could not include the agent yet, and that call tore down the refresh tick, so the bar only reappeared when the agent finished (or never, while it ran). The Agent tool's background branch now re-arms and refreshes the fleet from its `onSessionCreated` callback, the same pattern the foreground branch and `@mention` spawns already use.
+
 - **FleetView auto-expansion now tracks workflow runs, not just agents.** A bar dismissed with → re-expands on its own when a workflow run appears (new agents already did). The `←` activator at an empty prompt is unchanged from before.
 - **Headless wait setting row is now editable.** `Headless wait (min)` advertised "Enter to type" but the menu never opened an input for it, leaving the row a no-op; Enter now opens the numeric prompt.
 - **Settings tests no longer read the user's global config.** `settings-descriptors`, `background-by-default` and `wait-queued` boot the real extension and now isolate `PI_CODING_AGENT_DIR` in temp dirs, so `npm run test` stays hermetic on machines whose `~/.pi/agent/subagents.json` departs from the defaults.
