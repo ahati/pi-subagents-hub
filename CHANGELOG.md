@@ -9,6 +9,12 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **FleetView auto-expansion now tracks workflow runs, not just agents.** A bar dismissed with → re-expands on its own when a workflow run appears (new agents already did). The `←` activator at an empty prompt is unchanged from before.
+- **Headless wait setting row is now editable.** `Headless wait (min)` advertised "Enter to type" but the menu never opened an input for it, leaving the row a no-op; Enter now opens the numeric prompt.
+- **Settings tests no longer read the user's global config.** `settings-descriptors`, `background-by-default` and `wait-queued` boot the real extension and now isolate `PI_CODING_AGENT_DIR` in temp dirs, so `npm run test` stays hermetic on machines whose `~/.pi/agent/subagents.json` departs from the defaults.
+
 ## [2026.11.191] - 2026-11-19
 
 > **⚠️ Behavior change — the `subagents:rpc:stop` reply can arrive up to 5 s later** ([#443](https://github.com/tintinweb/pi-subagents/issues/443)). It now waits until the stopped agent and every agent below it have finished, and returns `{ settled }`. A caller whose stop timeout is under 5 s should raise it, or pass a smaller `settleTimeoutMs`.

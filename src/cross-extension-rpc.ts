@@ -17,7 +17,7 @@
 import { isTopLevelAgent } from "./agent-manager.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
-import { type SubagentInfo, toSubagentInfo } from "./subagent-info.js";
+import { toSubagentInfo } from "./subagent-info.js";
 import type { AgentRecord } from "./types.js";
 import type { WorkflowDetail, WorkflowInfo } from "./workflow-info.js";
 

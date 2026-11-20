@@ -12,7 +12,7 @@ import { toSubagentInfo } from "../subagent-info.js";
 import type { AgentRecord, JoinMode } from "../types.js";
 import type { AgentActivity, AgentWidget } from "../ui/agent-widget.js";
 import type { FleetList } from "../ui/fleet-list.js";
-import { getLifetimeTotal, type PendingUsagePool, toReportedUsage } from "../usage.js";
+import { type PendingUsagePool, toReportedUsage } from "../usage.js";
 import { buildNotificationDetails, createActivityTracker, formatTaskNotification } from "./renderers.js";
 
 export interface ManagerSetupDeps {

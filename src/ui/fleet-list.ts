@@ -20,6 +20,7 @@ import type { AgentRecord, UIStyle, ViewerStyle } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import type { WorkflowRunControls } from "./agent-hub.js";
 import { openAgentHub } from "./agent-hub.js";
+import { buildAgentHierarchy } from "./agent-tree.js";
 import { type AgentActivity, buildInvocationTags, formatCost, formatFleetElapsed, formatFleetTokens, type Theme } from "./agent-widget.js";
 import { type ViewerBackgroundAction } from "./conversation-viewer.js";
 import type { WorkflowDialogSource } from "./workflow-view.js";
@@ -84,6 +85,12 @@ export type AgentEntry = {
 };
 type WorkflowEntry = { kind: "workflow"; workflow: FleetWorkflow };
 type FleetEntry = MainEntry | WorkflowEntry | AgentEntry;
+
+function rosterEntryKey(entry: FleetEntry): string | undefined {
+  if (entry.kind === "agent") return `agent:${entry.record.id}`;
+  if (entry.kind === "workflow") return `wf:${entry.workflow.id}`;
+  return undefined;
+}
 
 /** Cells in a workflow row's progress bar — Claude Code's width. */
 export const PROGRESS_BAR_CELLS = 20;
@@ -158,12 +165,12 @@ export class FleetList {
   /**
    * Set when → dismisses the bar. The list stays hidden — ↓/← recall it (the
    * activators are the "I want the fleet view" keys), and the flag clears when
-   * the roster empties or when agents are added/removed so fresh agent activity
+   * the roster empties or when items are added/removed so fresh fleet activity
    * re-expands the bar on its own.
    */
   private dismissed = false;
-  /** Track agent IDs to trigger auto-expansion when agents are added or removed. */
-  private previousAgentIds: Set<string> = new Set();
+  /** Track fleet item keys to trigger auto-expansion when agents or workflows are added or removed. */
+  private previousRosterKeys: Set<string> = new Set();
   /**
    * Set while the agent hub overlay is up. Like `dismissed`, it holds the bar
    * down without touching the roster — but it is the hub's state, not the
@@ -293,7 +300,7 @@ export class FleetList {
     this.tui = undefined;
     this.active = false;
     this.dismissed = false;
-    this.previousAgentIds.clear();
+    this.previousRosterKeys.clear();
     // Null last so a `viewerClose()` microtask above can't re-register the widget.
     this.ui = undefined;
   }
@@ -307,15 +314,17 @@ export class FleetList {
   update(): void {
     if (!this.ui) return;
 
-    // Detect added or removed agents to auto-expand the fleet view if previously dismissed.
-    const currentAgentIds = new Set(this.agentRosterEntries().map(e => e.record.id));
+    // Detect added or removed items to auto-expand the fleet view if previously dismissed.
+    const currentRosterKeys = new Set(
+      this.roster().map(rosterEntryKey).filter((k): k is string => k != null),
+    );
     if (this.dismissed) {
       let changed = false;
-      if (this.previousAgentIds.size !== currentAgentIds.size) {
+      if (this.previousRosterKeys.size !== currentRosterKeys.size) {
         changed = true;
       } else {
-        for (const id of currentAgentIds) {
-          if (!this.previousAgentIds.has(id)) {
+        for (const key of currentRosterKeys) {
+          if (!this.previousRosterKeys.has(key)) {
             changed = true;
             break;
           }
@@ -325,7 +334,7 @@ export class FleetList {
         this.dismissed = false;
       }
     }
-    this.previousAgentIds = currentAgentIds;
+    this.previousRosterKeys = currentRosterKeys;
 
     // A run with no agents of its own left in the list is still worth a row —
     // it is the thing the user opens to see what its children did. Read off the
@@ -424,54 +433,13 @@ export class FleetList {
       )
     );
 
-    const eligibleMap = new Map<string, AgentRecord>(eligible.map(a => [a.id, a]));
-    const childrenByParent = new Map<string, AgentRecord[]>();
-
-    for (const a of eligible) {
-      if (a.parentAgentId && eligibleMap.has(a.parentAgentId)) {
-        let list = childrenByParent.get(a.parentAgentId);
-        if (!list) {
-          list = [];
-          childrenByParent.set(a.parentAgentId, list);
-        }
-        list.push(a);
-      }
-    }
-
-    for (const list of childrenByParent.values()) {
-      list.sort((a, b) => a.startedAt - b.startedAt);
-    }
-
-    // A child whose parent is not listed has no row to hang from: drop it.
-    const roots = eligible.filter(a => !a.parentAgentId);
-    roots.sort((a, b) => a.startedAt - b.startedAt);
-
-    const result: AgentEntry[] = [];
-    const visited = new Set<string>();
-
-    const appendWithChildren = (rec: AgentRecord, depth: number, isLastChild?: boolean) => {
-      if (visited.has(rec.id)) return;
-      visited.add(rec.id);
-
-      result.push({
-        kind: "agent",
-        record: rec,
-        depth,
-        isLastChild,
-      });
-
-      const children = childrenByParent.get(rec.id) ?? [];
-      for (let i = 0; i < children.length; i++) {
-        const isLast = i === children.length - 1;
-        appendWithChildren(children[i], depth + 1, isLast);
-      }
-    };
-
-    for (const root of roots) {
-      appendWithChildren(root, 0);
-    }
-
-    return result;
+    const nodes = buildAgentHierarchy(eligible, { sortRoots: true });
+    return nodes.map(n => ({
+      kind: "agent",
+      record: n.record,
+      depth: n.depth,
+      isLastChild: n.isLastChild,
+    }));
   }
 
 
@@ -765,7 +733,9 @@ export class FleetList {
         // cursor. Leave dismissal unchanged so only an explicit → hides the
         // restored bar.
         this.active = false;
-        this.previousAgentIds = new Set(this.agentRosterEntries().map(e => e.record.id));
+        this.previousRosterKeys = new Set(
+          this.roster().map(rosterEntryKey).filter((k): k is string => k != null),
+        );
         this.clearViewer();
       }, 0);
     });

@@ -17,7 +17,6 @@ import { Worker } from "node:worker_threads";
 import {
   type JournalKeyInput,
   journalKey,
-  type WorkflowJournalEntry,
   type WorkflowJournalGate,
 } from "./journal.js";
 import { type CompiledSchema, compileJsonSchema } from "./json-schema.js";
@@ -45,6 +44,7 @@ export * from "./script-validator.js";
 import { assertBoundarySafe } from "./boundary.js";
 import { validateScript } from "./script-validator.js";
 import { Semaphore } from "./semaphore.js";
+import { type LiveAgent, WorkflowControlManager } from "./workflow-control.js";
 import {
   type AgentCallPayload,
   applyGate,
@@ -55,6 +55,7 @@ import {
   unawaitedLaunchMessage,
   type WorkerMessage,
 } from "./workflow-gate.js";
+import { WorkflowReplayEngine } from "./workflow-replay.js";
 
 export async function runWorkflow(options: RunWorkflowOptions): Promise<WorkflowRunResult> {
   const { script, host } = options;
@@ -90,134 +91,17 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   /* --- resume state ---------------------------------------------------- */
 
   const journalEntries = options.journal?.entries ?? [];
-  const recordJournal = options.journal?.append;
-  const journalByPath = new Map<string, WorkflowJournalEntry>();
-  for (const entry of journalEntries) {
-    if (!journalByPath.has(entry.path)) journalByPath.set(entry.path, entry);
-  }
-  /**
-   * Whether replay is still allowed at all.
-   *
-   * Matching uses structural position, but invalidation remains run-wide: once
-   * a position misses — different key, a journaled failure, an invalid answer,
-   * or nothing recorded there — every later call runs live. A changed child or
-   * sibling can rewrite a file an unchanged prompt reads.
-   */
-  // A journal from a run that used `agent({ resume })` is declined whole: see
-  // journal.ts on why a replayed agent leaves nothing for a later resume to
-  // continue. Declining up front beats stranding the first `resume` call
-  // partway through a run that has already spent its cheap half.
   const journalResumes = journalEntries.some(entry => entry.resumed);
-  let prefixIntact = journalEntries.length > 0 && !journalResumes;
-  let replayedCount = 0;
+  const recordJournal = options.journal?.append;
+  const replayEngine = new WorkflowReplayEngine(journalEntries, journalResumes);
 
   /* --- live control ---------------------------------------------------- */
 
-  /**
-   * Agents that still have an unanswered `agent()` call, by index.
-   *
-   * The window in which skip and retry mean anything: before the entry appears
-   * there is nothing to act on, and after it is gone the script already has its
-   * value. `started` is what separates the two — a retry needs a child to stop.
-   */
-  interface LiveAgent {
-    agentId: string;
-    started: boolean;
-    intent?: "skip" | "retry";
-    /** Wakes it out of a pause hold, so a skip does not wait for a resume. */
-    wake?: () => void;
-  }
-  const liveAgents = new Map<number, LiveAgent>();
-
-  /**
-   * Output tokens this run has spent, mirrored to the script as
-   * `budget.spent()`.
-   *
-   * The host owns the number and every response carries it, rather than the
-   * worker accumulating its own: two counters would drift, and there is nothing
-   * to gain from the second one. Nor is there observable staleness — tokens
-   * only accrue through agents, and the script only learns anything through
-   * agent responses.
-   */
+  const control = new WorkflowControlManager();
   let spentOutputTokens = 0;
-
-  let paused = false;
-  /**
-   * Set by {@link WorkflowControl.stopWhenIdle} and never cleared: a parked run
-   * stays parked, whatever the dialog's `resume()` does next.
-   */
-  let draining = false;
-  /** Read through a call for the same reason `intent()` is — see below. */
-  const isPaused = () => paused || draining;
-  /**
-   * End the run once a park stop has nothing left in flight. Assigned inside
-   * the run promise, where `finish` exists; the control surface only calls it
-   * after that.
-   */
   let maybeFinishDrain = (): void => {};
-  const pauseWaiters = new Set<() => void>();
-  /** Release everyone held at a pause — on resume, and on the way out. */
-  function releasePause(): void {
-    for (const wake of [...pauseWaiters]) wake();
-    pauseWaiters.clear();
-  }
-  /** Park here while the run is paused, so no new agent is started. */
-  function pauseGate(live: LiveAgent): Promise<void> {
-    // `isPaused()` rather than `paused`: a draining run still parks at the gate.
-    // If it returned immediately, a call that already held a permit would spin
-    // through `release(); continue;` until the last in-flight agent settled.
-    if (!isPaused() || aborted || settled) return Promise.resolve();
-    return new Promise<void>(resolve => {
-      const wake = () => {
-        pauseWaiters.delete(wake);
-        live.wake = undefined;
-        resolve();
-      };
-      live.wake = wake;
-      pauseWaiters.add(wake);
-    });
-  }
 
-  options.onControl?.({
-    pause: () => { paused = true; },
-    resume: () => { paused = false; releasePause(); },
-    isPaused: () => isPaused(),
-    stopWhenIdle: () => {
-      draining = true;
-      // Not `releasePause()`: a woken caller that is still parked behind the
-      // park sees `settled` and bails at the acquire check, and waking them
-      // here would only race the finish below.
-      maybeFinishDrain();
-    },
-    skip: index => {
-      const live = liveAgents.get(index);
-      if (live === undefined || live.intent !== undefined) return false;
-      live.intent = "skip";
-      // A running child is stopped, which comes back as a skipped result; a
-      // held one is woken so it can bail at the gate it is parked on.
-      if (live.started) host.abortAgent(live.agentId);
-      else live.wake?.();
-      return true;
-    },
-    retry: index => {
-      const live = liveAgents.get(index);
-      if (live === undefined || !live.started || live.intent !== undefined) return false;
-      live.intent = "retry";
-      host.abortAgent(live.agentId);
-      return true;
-    },
-  });
-
-  /** The cached answer at this structural position, until the first miss. */
-  function replayAt(path: string, key: string): WorkflowJournalEntry | undefined {
-    if (!prefixIntact) return undefined;
-    const entry = journalByPath.get(path);
-    if (entry === undefined || entry.key !== key || !entry.ok || typeof entry.text !== "string") {
-      prefixIntact = false;
-      return undefined;
-    }
-    return entry;
-  }
+  control.bindControl(options.onControl, host, () => maybeFinishDrain());
 
   const worker = new Worker(WORKER_SOURCE, {
     eval: true,
@@ -273,13 +157,13 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       // it observes the settle and unwinds. Nothing depends on it — the run's
       // promise resolves either way — it just does not leave live-agent
       // bookkeeping behind for a run that is over.
-      releasePause();
+      control.releasePause();
       for (const agentId of inflight) host.abortAgent(agentId);
       inflight.clear();
       semaphore.drain();
       // Resolve only once the thread is actually down, so a caller that awaits
       // runWorkflow() is guaranteed not to be leaking one.
-      const settle = () => resolve({ ...result, meta, progress, agentCount, replayedCount });
+      const settle = () => resolve({ ...result, meta, progress, agentCount, replayedCount: replayEngine.replayedCount });
       void worker.terminate().then(settle, settle);
     };
 
@@ -299,7 +183,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     }
 
     maybeFinishDrain = () => {
-      if (!draining || settled || inflight.size > 0) return;
+      if (!control.isDraining() || settled || inflight.size > 0) return;
       finish({ status: "killed", error: WORKFLOW_PARK_STOP_ERROR });
     };
 
@@ -335,7 +219,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             callId,
             false,
             undefined,
-            replayedCount > 0 ?
+            replayEngine.replayedCount > 0 ?
               `agent() opts.resume: "${payload.resume}" was replayed from the resume journal, not run, so there is ` +
                 "no conversation in this run to continue. Re-run without resumeFromRunId."
             : `agent() opts.resume: no agent has completed under the label "${payload.resume}" in this run. ${
@@ -407,20 +291,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         ...payload,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       };
-      let replayed = replayAt(payload.path, journalKey(keyInput));
-      // A replayed answer still has to satisfy the schema. The key covers a
-      // schema that *changed*, but not a journal that was hand-edited, and not
-      // the empty text a torn entry leaves behind — either would hand the
-      // script a null from an entry the journal claims succeeded.
-      if (replayed !== undefined && compiledSchema !== undefined) {
-        const recheck = applySchema({ ok: true, text: replayed.text ?? "" }, compiledSchema);
-        if (!recheck.ok) {
-          prefixIntact = false;
-          replayed = undefined;
-        }
-      }
+      let replayed = replayEngine.match(payload.path, journalKey(keyInput), compiledSchema);
       if (replayed !== undefined) {
-        replayedCount++;
         const replayedText = replayed.text ?? "";
         const at = Date.now();
         emit([
@@ -472,8 +344,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
       // Registered for exactly as long as the call is unanswered, which is the
       // window in which skip and retry mean anything.
-      const live: LiveAgent = { agentId, started: false };
-      liveAgents.set(index, live);
+      const live = control.register(index, agentId);
       // Read through a call, not off the field: `intent` is set from outside
       // this function while it is suspended at an await, so control-flow
       // narrowing across the awaits would be reasoning about a value that has
@@ -484,7 +355,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         for (;;) {
           // Held before the slot, not after: a paused run must not sit on
           // concurrency it is not using while its running agents drain.
-          await pauseGate(live);
+          await control.pauseGate(live, () => aborted || settled);
           if (intent() === "skip") return settleSkipped({});
 
           // A resumed agent waits its turn like any other: it is the same amount of
@@ -499,7 +370,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           // permit when the pause landed, so it never passed the gate above.
           // Hand the permit back and go wait at the gate like everything else,
           // or a pause would leak exactly as many agents as were queued.
-          if (isPaused() && !aborted && !settled) {
+          if (control.isPaused() && !aborted && !settled) {
             semaphore.release();
             continue;
           }
@@ -712,7 +583,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           return;
         }
       } finally {
-        liveAgents.delete(index);
+        control.unregister(index);
       }
     }
 
@@ -777,7 +648,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             // to see it settle. Outside a park the rejection propagates exactly
             // as this fire-and-forget dispatch always let it.
             maybeFinishDrain();
-            if (!draining) throw error;
+            if (!control.isDraining()) throw error;
           });
           break;
         case "complete": {

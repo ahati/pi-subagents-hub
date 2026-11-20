@@ -277,6 +277,20 @@ describe("FleetList navigation", () => {
   it("also activates on ← (matches the '← for agents' hint)", () => {
     const h = harness([makeRecord()]);
     expect(h.press(LEFT)).toEqual({ consume: true });
+    expect(h.render().some(l => l.includes("enter view"))).toBe(true);
+  });
+
+  it("activates on ← at an empty prompt when only a workflow is running", () => {
+    const h = harness([]);
+    h.setWorkflows([makeWorkflow({ id: "wf_1" })]);
+    expect(h.press(LEFT)).toEqual({ consume: true });
+    expect(h.render().some(l => l.includes("enter view"))).toBe(true);
+  });
+
+  it("leaves ← to the prompt when roster is empty (no agents or workflows)", () => {
+    const h = harness([]);
+    expect(h.press(LEFT)).toBeUndefined();
+    expect(h.render()).toEqual([]);
   });
 
   it("keeps a viewed child listed after its parent would have dropped out", () => {
@@ -1604,6 +1618,65 @@ describe("FleetList Claude Code nested subagents & auto-expand", () => {
     // Bar auto-expands
     const lines = h.render();
     expect(lines.length).toBeGreaterThan(0);
+  });
+
+  it("auto-expands when an agent is removed while dismissed", () => {
+    const a1 = makeRecord({ id: "a1", description: "Agent 1" });
+    const a2 = makeRecord({ id: "a2", description: "Agent 2" });
+    const agents = [a1, a2];
+    const h = harness(agents);
+    h.press(DOWN);
+    h.press(RIGHT); // dismiss
+    expect(h.render()).toEqual([]);
+
+    // Remove an agent while leaving another
+    agents.pop();
+    h.fleet.update();
+
+    // Bar auto-expands
+    const lines = h.render();
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.some(l => l.includes("Agent 1"))).toBe(true);
+    expect(lines.some(l => l.includes("Agent 2"))).toBe(false);
+  });
+
+  it("auto-expands when a workflow is added while dismissed", () => {
+    const h = harness([]);
+    h.setWorkflows([makeWorkflow({ id: "wf-1", name: "workflow-1" })]);
+    h.press(DOWN);
+    h.press(RIGHT); // dismiss
+    expect(h.render()).toEqual([]);
+
+    // Add another workflow
+    h.setWorkflows([
+      makeWorkflow({ id: "wf-1", name: "workflow-1" }),
+      makeWorkflow({ id: "wf-2", name: "workflow-2" }),
+    ]);
+
+    // Bar auto-expands
+    const lines = h.render();
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.some(l => l.includes("workflow-2"))).toBe(true);
+  });
+
+  it("auto-expands when a workflow is removed while dismissed", () => {
+    const h = harness([]);
+    h.setWorkflows([
+      makeWorkflow({ id: "wf-1", name: "workflow-1" }),
+      makeWorkflow({ id: "wf-2", name: "workflow-2" }),
+    ]);
+    h.press(DOWN);
+    h.press(RIGHT); // dismiss
+    expect(h.render()).toEqual([]);
+
+    // Remove one workflow while one remains
+    h.setWorkflows([makeWorkflow({ id: "wf-1", name: "workflow-1" })]);
+
+    // Bar auto-expands
+    const lines = h.render();
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.some(l => l.includes("workflow-1"))).toBe(true);
+    expect(lines.some(l => l.includes("workflow-2"))).toBe(false);
   });
 
   it("refuses pause on nested child subagents with a warning notification", () => {

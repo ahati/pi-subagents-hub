@@ -19,8 +19,6 @@ import {
 import { loadCustomAgents } from "./custom-agents.js";
 import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
 import { consumeTerminalResult, waitForRecord } from "./manager/wait-for-record.js";
-import { resolveModel } from "./model-resolver.js";
-import { checkModelScope } from "./model-scope.js";
 import {
   createOutputFilePath,
   getOutputTranscriptDefault,
@@ -28,7 +26,17 @@ import {
   writeInitialEntry,
 } from "./output-file.js";
 import { resolveResumeTurnLimit } from "./runner/runner-settings.js";
-import { formatAnswerSteer, formatQuestionCard, getForegroundOutcomeNote, getStatusNote, openQuestionsFooter, partialOutputSuffix } from "./status-note.js";
+import { formatQuestionCard, getForegroundOutcomeNote, getStatusNote, openQuestionsFooter, partialOutputSuffix } from "./status-note.js";
+import {
+  answerNestedSchema,
+  deliverQuestionAnswer,
+  getNestedResultSchema,
+  queueOrSteerAgent,
+  resolveAndScopeModel,
+  resolveTargetQuestion,
+  shouldWaitForRecord,
+  steerNestedSchema,
+} from "./tools/subagent-tool-core.js";
 import type {
   AgentConfig,
   AgentInvocation,
@@ -316,28 +324,19 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         worktreeAllowed: isWorktreeIsolationEnabled(),
         defaultRunInBackground: false,
       });
-      let model = ctx.model;
-      if (invocation.modelInput) {
-        const resolvedModel = resolveModel(invocation.modelInput, ctx.modelRegistry);
-        if (typeof resolvedModel === "string") {
-          if (invocation.modelFromParams) return textResult(resolvedModel, true);
-        } else {
-          model = resolvedModel;
-        }
-      }
-
       // Same scopeModels policy as the top-level Agent tool — a nested spawn
       // must not escape the allowlist. A "warn" verdict proceeds silently:
       // child sessions have no UI surface to toast to.
-      const scopeVerdict = checkModelScope({
-        model,
-        cwd: context.configCwd,
-        modelRegistry: ctx.modelRegistry,
-        callerSupplied: invocation.modelFromParams,
-        agentLabel: config?.displayName ?? resolvedType,
+      const modelResult = resolveAndScopeModel({
         modelInput: invocation.modelInput,
+        callerSupplied: invocation.modelFromParams,
+        fallbackModel: ctx.model,
+        modelRegistry: ctx.modelRegistry,
+        cwd: context.configCwd,
+        agentLabel: config?.displayName ?? resolvedType,
       });
-      if (scopeVerdict.kind === "error") return textResult(scopeVerdict.message, true);
+      if (!modelResult.success) return textResult(modelResult.error, true);
+      const model = modelResult.model;
 
       // The whole branch shares the root session's transcript directory; read it
       // off the owning parent rather than this child session's own id.
@@ -459,10 +458,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
     name: NESTED_TOOL_NAMES[1],
     label: "Get Nested Agent Result",
     description: "Check or wait for a background nested agent owned by this parent.",
-    parameters: Type.Object({
-      agent_id: Type.String(),
-      wait: Type.Optional(Type.Boolean()),
-    }),
+    parameters: getNestedResultSchema,
     execute: async (_toolCallId, params, signal) => {
       const record = context.manager.getRecord(params.agent_id);
       if (!ownsRecord(record, context.parentAgentId)) {
@@ -472,8 +468,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       // Cancellation stops only this wait; the nested child keeps running and
       // stays unconsumed. Queued records have no promise until the manager starts
       // them, so poll — abortably — until they leave the queue, then await.
-      if ((params.wait && (record.status === "running" || record.status === "queued")) ||
-        (record.worktree && record.status !== "running" && record.status !== "queued" && record.status !== "paused")) {
+      if (shouldWaitForRecord(record, params.wait)) {
         const owner = context.manager.getRecord(context.parentAgentId);
         if (owner) {
           owner.waitingChildIds ??= new Set();
@@ -496,26 +491,18 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
     name: NESTED_TOOL_NAMES[2],
     label: "Steer Nested Agent",
     description: "Send guidance to a running nested agent owned by this parent.",
-    parameters: Type.Object({
-      agent_id: Type.String(),
-      message: Type.String(),
-    }),
+    parameters: steerNestedSchema,
     execute: async (_toolCallId, params) => {
       const record = context.manager.getRecord(params.agent_id);
       if (!ownsRecord(record, context.parentAgentId) || record.status !== "running") {
         return textResult(`Running nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
       }
-      // Session not ready yet — queue the steer. The manager flushes pending
-      // steers when the session is created (same contract as the top-level tool).
-      if (!record.session) {
-        if (!record.pendingSteers) record.pendingSteers = [];
-        record.pendingSteers.push(params.message);
-        return textResult(`Steering message queued for nested agent ${params.agent_id}.`);
+      const res = await queueOrSteerAgent({ record, message: params.message });
+      if ("error" in res) {
+        return textResult(`Failed to steer nested agent: ${res.error}`, true);
       }
-      try {
-        await record.session.steer(params.message);
-      } catch (err) {
-        return textResult(`Failed to steer nested agent: ${err instanceof Error ? err.message : String(err)}`, true);
+      if (res.queued) {
+        return textResult(`Steering message queued for nested agent ${params.agent_id}.`);
       }
       return textResult(`Steering message sent to nested agent ${params.agent_id}.`);
     },
@@ -593,13 +580,8 @@ export function createAskAnswerTools(context: AskAnswerContext): ToolDefinition[
         // steer's resolution window must not be clobbered back to delivered.
         q.state = "delivered";
         q.deliveredTo = owner.id;
-        try {
-          if (!owner.session) {
-            owner.pendingSteers = [...(owner.pendingSteers ?? []), card];
-          } else {
-            await owner.session.steer(card);
-          }
-        } catch {
+        const res = await queueOrSteerAgent({ record: owner, message: card });
+        if ("error" in res) {
           // Undeliverable right now: the question stays on the record and the
           // result-time footer still surfaces it to whoever reads the result.
           if (q.state === "delivered") {
@@ -643,17 +625,11 @@ export function createAskAnswerTools(context: AskAnswerContext): ToolDefinition[
     name: NESTED_TOOL_NAMES[4],
     label: "Answer Nested Agent",
     description: "Answer a question one of your nested agents asked via ask_parent. The answer is delivered to the (still running) agent as a steering message.",
-    parameters: Type.Object({
-      agent_id: Type.String({ description: "The asking agent's ID, from the question card." }),
-      question_id: Type.Optional(Type.String({ description: "Defaults to the agent's oldest open question." })),
-      answer: Type.String({ description: "The decision or fact the agent asked for." }),
-    }),
+    parameters: answerNestedSchema,
     execute: async (_toolCallId, params) => {
       const record = context.manager.getRecord(params.agent_id);
-      const qs = record?.questions ?? [];
-      const q = params.question_id
-        ? qs.find(x => x.id === params.question_id)
-        : qs.find(x => x.state === "open" || x.state === "delivered") ?? qs[qs.length - 1];
+      const target = resolveTargetQuestion(record, params.question_id);
+      const q = target.question;
       // The direct owner answers its own child's question — and so does any
       // session the card was routed to: resolveAnswerer skips blocked owners,
       // so the card may legitimately land on a grandparent rather than the
@@ -662,34 +638,20 @@ export function createAskAnswerTools(context: AskAnswerContext): ToolDefinition[
       if (!record || (!ownsRecord(record, context.parentAgentId) && !routed)) {
         return textResult(`Nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
       }
-      if (!q || (q.state !== "open" && q.state !== "delivered")) {
-        const closed = !q ? ""
-          : q.state === "superseded" ? ` — it was superseded by a later ask`
-          : q.state === "dropped" ? ` — it was dropped when the run ended in failure or was aborted; it asked: "${q.question}"`
-          : ` — its state is ${q.state}`;
-        return textResult(`No open question${params.question_id ? ` "${params.question_id}"` : ""} on agent ${params.agent_id}${closed}.`, true);
+      if (!q) {
+        return textResult(`No open question${params.question_id ? ` "${params.question_id}"` : ""} on agent ${params.agent_id}${target.closedReason ?? ""}.`, true);
       }
       if (record.status !== "running" && record.status !== "queued") {
         return textResult(`Agent ${params.agent_id} already finished (${record.status}); the question rode its result. Resume it with the answer instead.`, true);
       }
-      const priorState = q.state;
-      q.state = "answered";
-      q.answer = params.answer;
-      q.answeredBy = context.parentAgentId;
-      const message = formatAnswerSteer(q);
-      try {
-        if (!record.session) {
-          record.pendingSteers = [...(record.pendingSteers ?? []), message];
-        } else {
-          await record.session.steer(message);
-        }
-      } catch (err) {
-        // Delivery failed: un-answer, so the question stays open for a retry
-        // instead of silently vanishing behind a state the child never saw.
-        q.state = priorState;
-        q.answer = undefined;
-        q.answeredBy = undefined;
-        return textResult(`Failed to deliver the answer to agent ${params.agent_id}: ${err instanceof Error ? err.message : String(err)}`, true);
+      const delivery = await deliverQuestionAnswer({
+        record,
+        question: q,
+        answer: params.answer,
+        answeredBy: context.parentAgentId,
+      });
+      if (!delivery.success) {
+        return textResult(`Failed to deliver the answer to agent ${params.agent_id}: ${delivery.error}`, true);
       }
       return textResult(`Answer to ${q.id} delivered to agent ${params.agent_id}.`);
     },

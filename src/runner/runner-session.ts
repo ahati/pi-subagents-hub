@@ -15,9 +15,9 @@ import {
   DefaultResourceLoader,
   type ExtensionContext,
   getAgentDir,
-  type LoadExtensionsResult,
   SessionManager,
   SettingsManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
   type Conversation,
@@ -40,45 +40,21 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import {
-  BUILTIN_TOOL_NAMES,
   getAgentConfig,
   getConfig,
-  getMemoryToolNames,
-  getReadOnlyMemoryToolNames,
-  getToolNamesForType,
 } from "../agent-types.js";
 import { getCacheRetention, installCacheRetention } from "../cache-retention.js";
 import { runInChildSessionContext } from "../child-context.js";
 import { buildParentContext } from "../context.js";
-import { DEFAULT_AGENTS } from "../default-agents.js";
-import { detectEnv } from "../env.js";
-import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "../memory.js";
-import {
-  createAskAnswerTools,
-  createNestedSubagentTools,
-  getMaxSubagentDepth,
-} from "../nested-tools.js";
-import { buildAgentPrompt, inheritableParentPrompt, type PromptExtras } from "../prompts.js";
 import { continueSessionBare } from "../session-continue.js";
-import { loadRequiredExtensionPaths } from "../settings.js";
-import { preloadSkills } from "../skill-loader.js";
-import {
-  createStructuredCapture,
-  createStructuredOutputTool,
-  structuredRetryPrompt,
-} from "../structured-output.js";
+import { structuredRetryPrompt } from "../structured-output.js";
 import type { AgentConfig, EffectiveThinkingLevel, SubagentType } from "../types.js";
 import { clearDurableContextUsage, setDurableContextUsage } from "../usage.js";
 import { restoreBranchModel, restoreBranchThinkingLevel } from "./branch-selection.js";
-import { bridgePiToolToDurableTool } from "./durable-tool-bridge.js";
+import { bridgeDurableTool, bridgePiToolToDurableTool } from "./durable-tool-bridge.js";
 import {
-  extensionCanonicalNames,
   installExtensionToolScope,
   type NestedCallGate,
-  parseExtensionsSpec,
-  parseExtSelectors,
-  SCOPE_GATE_NAME,
-  scopeGateExtension,
 } from "./extension-scope.js";
 import {
   collectResponseText,
@@ -88,490 +64,22 @@ import {
   resolveConfiguredSessionDir,
 } from "./runner-helpers.js";
 import {
+  createRunnerResourceLoader,
+} from "./runner-loader.js";
+import {
+  prepareAgentSystemPrompt,
+} from "./runner-prompt.js";
+import {
   getRememberAgents,
-  isUncutPromptProvider,
   resolveDefaultModel,
   resolveEffectiveMaxTurns,
 } from "./runner-settings.js";
 import {
-  EXCLUDED_TOOL_NAMES,
-  PI_BUILTIN_EXTENSIONS,
-  type RunOptions,
-  type RunResult,
-} from "./runner-types.js";
-
-interface PreparedSystemPrompt {
-  systemPrompt: string;
-  toolNames: string[];
-  noSkills: boolean;
-  nested: PreparedNestedTools;
-}
-
-interface PreparedNestedTools {
-  tools: ReturnType<typeof createNestedSubagentTools>;
-  disallowedSet: Set<string> | undefined;
-}
-
-/**
- * SRP Phase 1: Prepare the agent's system prompt, inheritance, memory blocks, and skills.
- */
-async function prepareAgentSystemPrompt(
-  ctx: ExtensionContext,
-  type: SubagentType,
-  agentConfig: AgentConfig | undefined,
-  config: ReturnType<typeof getConfig>,
-  effectiveCwd: string,
-  configCwd: string,
-  model: ReturnType<typeof resolveDefaultModel>,
-  options: RunOptions,
-): Promise<PreparedSystemPrompt> {
-  const env = await detectEnv(options.pi, effectiveCwd);
-
-  // Get parent system prompt for append-mode agents. Bridge providers need the
-  // full assembled prompt to project it into their harness; every other provider
-  // gets the sections the child renders itself (skills, cwd, extension sections)
-  // stripped so they are not duplicated.
-  const parentSystemPrompt = typeof ctx.getSystemPrompt === "function"
-    ? isUncutPromptProvider(model?.provider)
-      ? ctx.getSystemPrompt()
-      : inheritableParentPrompt(ctx.getSystemPrompt(), ctx.cwd)
-    : "";
-
-  const extras: PromptExtras = {};
-  if (options.worktreeBase) extras.worktreeBase = options.worktreeBase;
-  if (options.workflow && !options.structuredOutput) extras.workflowChild = true;
-
-  const isolated = agentConfig?.isolated ?? options.isolated;
-  const skills = isolated ? false : config.skills;
-
-  // A per-call list (`agent({ disallowedTools })` in a workflow script) adds to
-  // the agent definition's; it can narrow what the child gets but never widen
-  // it, so both are unioned before the tool scope is applied.
-  const disallowedNames = [...(agentConfig?.disallowedTools ?? []), ...(options.disallowedTools ?? [])];
-  const disallowedSet = disallowedNames.length > 0 ? new Set(disallowedNames) : undefined;
-
-  // Nested delegation tools (opt-in, ownership-scoped). Empty unless the agent
-  // set `allowed_subagents` and a nestedRuntime was provided — and never when
-  // isolated. Decided before the prompt is built, which says so when the agent
-  // delegates.
-  const effectiveMaxDepth = options.nestedRuntime?.maxSubagentDepth ?? getMaxSubagentDepth();
-  // At (or past) the cap this agent can never spawn, so it can never own a child
-  // to fetch from or steer either — inject nothing rather than three tools whose
-  // every call is an error. This is also what makes `maxSubagentDepth` 0/1 mean
-  // "nesting off" instead of "nesting always fails".
-  const nestedRuntime = options.nestedRuntime && options.nestedRuntime.depth < effectiveMaxDepth
-    ? options.nestedRuntime
-    : undefined;
-  // A workflow agent running the built-in general-purpose (what an untyped
-  // agent() gets) does not delegate: Claude Code's `workflow-subagent` drops the
-  // Agent tool, and the workflow script is what fans out. A custom agent's own
-  // `allowed_subagents` still applies.
-  const builtinInWorkflow = options.workflow === true && agentConfig?.isDefault === true;
-  const nestedTools = agentConfig?.allowedSubagents && nestedRuntime && !isolated && !builtinInWorkflow
-    ? createNestedSubagentTools({
-        manager: nestedRuntime.manager,
-        pi: options.pi,
-        parentAgentId: nestedRuntime.parentAgentId,
-        depth: nestedRuntime.depth,
-        maxSubagentDepth: effectiveMaxDepth,
-        allowedSubagents: agentConfig.allowedSubagents,
-        configCwd,
-      })
-    : [];
-  const nestedToolNames = new Set(nestedTools.map(tool => tool.name));
-  // Only where the built-in general-purpose can actually spawn — not in a
-  // workflow, at the depth cap, isolated, or with `Agent` disallowed.
-  if (agentConfig?.isDefault && nestedToolNames.has("Agent") && !disallowedSet?.has("Agent")) {
-    extras.delegationGuideline = true;
-  }
-
-  if (Array.isArray(skills)) {
-    const loaded = preloadSkills(skills, configCwd);
-    if (loaded.length > 0) {
-      extras.skillBlocks = loaded;
-    }
-  }
-
-  let toolNames = getToolNamesForType(type);
-
-  if (agentConfig?.memory) {
-    const existingNames = new Set(toolNames);
-    const effectivelyHas = (name: string) => existingNames.has(name) && !disallowedSet?.has(name);
-    const hasWriteTools = effectivelyHas("write") || effectivelyHas("edit");
-
-    if (hasWriteTools) {
-      const extraNames = getMemoryToolNames(existingNames);
-      if (extraNames.length > 0) toolNames = [...toolNames, ...extraNames];
-      extras.memoryBlock = buildMemoryBlock(agentConfig.name, agentConfig.memory, configCwd);
-    } else {
-      const extraNames = getReadOnlyMemoryToolNames(existingNames);
-      if (extraNames.length > 0) toolNames = [...toolNames, ...extraNames];
-      extras.memoryBlock = buildReadOnlyMemoryBlock(agentConfig.name, agentConfig.memory, configCwd);
-    }
-  }
-
-  let systemPrompt: string;
-  if (agentConfig) {
-    systemPrompt = buildAgentPrompt(agentConfig, effectiveCwd, env, parentSystemPrompt, extras);
-  } else {
-    const fallback = DEFAULT_AGENTS.get("general-purpose");
-    if (!fallback) throw new Error(`No fallback config available for unknown type "${type}"`);
-    systemPrompt = buildAgentPrompt({ ...fallback, name: type }, effectiveCwd, env, parentSystemPrompt, extras);
-  }
-
-  const noSkills = skills === false || Array.isArray(skills);
-  return { systemPrompt, toolNames, noSkills, nested: { tools: nestedTools, disallowedSet } };
-}
-
-interface RunnerResourceContext {
-  loader: DefaultResourceLoader;
-  agentDir: string;
-  sessionSettingsManager: SettingsManager;
-  nestedCallGate: NestedCallGate;
-  extNames: Set<string>;
-  narrowing: Map<string, Set<string>>;
-  mcpToolPatterns: string[] | undefined;
-  noExtensions: boolean;
-  requiredExtensionPaths: Set<string>;
-}
-
-/**
- * SRP Phase 2: Create resource loader, compute extension filters, and report misconfiguration warnings.
- */
-async function createRunnerResourceLoader(
-  ctx: ExtensionContext,
-  type: SubagentType,
-  agentConfig: AgentConfig | undefined,
-  config: ReturnType<typeof getConfig>,
-  configCwd: string,
-  effectiveCwd: string,
-  agentDir: string,
-  settingsManager: SettingsManager,
-  systemPrompt: string,
-  noSkills: boolean,
-  options: RunOptions,
-): Promise<RunnerResourceContext> {
-  const isolated = agentConfig?.isolated ?? options.isolated;
-  const extensions = isolated ? false : config.extensions;
-  const excludeExtensions = isolated ? undefined : config.excludeExtensions;
-
-  const { extNames, narrowing } = parseExtSelectors(
-    isolated ? [] : (agentConfig?.extSelectors ?? []),
-  );
-  const mcpToolPatterns = agentConfig?.mcpToolPatterns;
-  const noExtensions = extensions === false;
-
-  const extensionsSpec = Array.isArray(extensions)
-    ? parseExtensionsSpec(extensions, configCwd)
-    : undefined;
-  const keepNames = extensionsSpec?.names ?? new Set<string>();
-  const excludeNames = new Set((excludeExtensions ?? []).map((n: string) => n.toLowerCase()));
-  const hasExcludes = excludeNames.size > 0;
-  const loadAll = extensions === true || extensionsSpec?.wildcard === true;
-  // Globally required policy extensions are handler-only: loaded into every
-  // session, never removable by agent frontmatter, and their tools are never
-  // scoped in (see installExtensionToolScope's handlerOnlyPaths).
-  const requiredExtensionPaths = new Set(loadRequiredExtensionPaths(agentDir).map((entry) => resolve(entry)));
-  const additionalExtensionPaths = [...new Set([
-    ...(extensionsSpec?.paths ?? []),
-    ...requiredExtensionPaths,
-  ])];
-  let discoveredNames: Set<string> | undefined;
-  const extensionsOverride: ((base: LoadExtensionsResult) => LoadExtensionsResult) | undefined =
-    requiredExtensionPaths.size === 0 && (noExtensions || (loadAll && !hasExcludes))
-      ? undefined
-      : (base) => {
-          discoveredNames = new Set(base.extensions.flatMap((e) => extensionCanonicalNames(e.path)));
-          return {
-            ...base,
-            extensions: base.extensions.filter((e) => {
-              if (e.path === `<inline:${SCOPE_GATE_NAME}>`) return true;
-              if (requiredExtensionPaths.has(resolve(e.path))) return true;
-              if (noExtensions) return false;
-              const canons = extensionCanonicalNames(e.path);
-              if (canons.some((n) => excludeNames.has(n))) return false;
-              return loadAll || canons.some((n) => keepNames.has(n));
-            }),
-          };
-        };
-
-  const projectTrusted = typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true;
-  const sessionSettingsManager =
-    resolve(effectiveCwd) === resolve(configCwd)
-      ? settingsManager
-      : Object.assign(SettingsManager.create(configCwd, agentDir, { projectTrusted }), {
-          isProjectTrusted: () => false,
-        });
-  const nestedCallGate: NestedCallGate = {};
-
-  const loader = new DefaultResourceLoader({
-    cwd: configCwd,
-    agentDir,
-    settingsManager,
-    noExtensions: noExtensions && requiredExtensionPaths.size === 0,
-    additionalExtensionPaths: additionalExtensionPaths.length ? additionalExtensionPaths : undefined,
-    extensionsOverride,
-    extensionFactories: [
-      ...PI_BUILTIN_EXTENSIONS,
-      ...(noExtensions ? [] : [scopeGateExtension(nestedCallGate)]),
-    ],
-    disabledBuiltinExtensions: process.argv.some((a) => a === "--no-extensions" || a === "-ne")
-      ? ["codemode", "tool-search", "mcp"]
-      : process.argv.includes("--no-mcp")
-        ? ["mcp"]
-        : undefined,
-    noSkills,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-    systemPromptOverride: () => systemPrompt,
-    appendSystemPromptOverride: () => [],
-  });
-  await runInChildSessionContext(() => loader.reload());
-
-  const loadedExtensionPaths = new Set(loader.getExtensions().extensions.map((e) => resolve(e.path)));
-  const missingRequiredExtension = [...requiredExtensionPaths].find((entry) => !loadedExtensionPaths.has(entry));
-  if (missingRequiredExtension) {
-    throw new Error(`Required subagent extension failed to load: ${missingRequiredExtension}`);
-  }
-
-  if (agentConfig?.builtinToolNames?.length) {
-    const knownBuiltins = new Set(BUILTIN_TOOL_NAMES);
-    for (const name of agentConfig.builtinToolNames) {
-      if (!knownBuiltins.has(name)) {
-        options.onToolActivity?.({
-          type: "warning",
-          toolName: `tools-error:tool "${name}" requested by agent "${type}" is not a known built-in`,
-        });
-      }
-    }
-  }
-
-  if (hasExcludes && noExtensions) {
-    options.onToolActivity?.({
-      type: "warning",
-      toolName: `extension-error:exclude_extensions has no effect for agent "${type}" — extensions: false loads nothing`,
-    });
-  }
-  if (hasExcludes && discoveredNames) {
-    for (const name of excludeNames) {
-      if (!discoveredNames.has(name)) {
-        options.onToolActivity?.({
-          type: "warning",
-          toolName: `extension-error:exclude_extensions: "${name}" for agent "${type}" did not match any discovered extension`,
-        });
-      }
-    }
-  }
-  if (keepNames.size > 0 || extNames.size > 0) {
-    const survivingNames = new Set(
-      loader.getExtensions().extensions.flatMap((e) => extensionCanonicalNames(e.path)),
-    );
-    for (const name of keepNames) {
-      if (!survivingNames.has(name)) {
-        options.onToolActivity?.({
-          type: "warning",
-          toolName: excludeNames.has(name)
-            ? `extension-error:extension "${name}" is in both extensions: and exclude_extensions: for agent "${type}" — exclude wins`
-            : `extension-error:extension "${name}" requested by agent "${type}" was not loaded`,
-        });
-      }
-    }
-    for (const name of extNames) {
-      if (!survivingNames.has(name)) {
-        options.onToolActivity?.({
-          type: "warning",
-          toolName: `extension-error:ext:${name} referenced by agent "${type}" but extension "${name}" is not loaded (check extensions:/exclude_extensions:)`,
-        });
-      }
-    }
-  }
-  // MCP tools come from extensions, so with none loaded these entries cannot match.
-  if (mcpToolPatterns && noExtensions) {
-    options.onToolActivity?.({
-      type: "end",
-      toolName: `tools-error:${mcpToolPatterns.join(", ")} requested by agent "${type}" need extensions, but it loads none`,
-    });
-  }
-
-  return {
-    loader,
-    agentDir,
-    sessionSettingsManager,
-    nestedCallGate,
-    extNames,
-    narrowing,
-    mcpToolPatterns,
-    noExtensions,
-    requiredExtensionPaths,
-  };
-}
-
-interface SessionToolLoadout {
-  model: any;
-  thinkingLevel: any;
-  nestedTools: any[];
-  askTools: any[];
-  structuredTools: any[];
-  structuredCapture: ReturnType<typeof createStructuredCapture> | undefined;
-  disallowedSet: Set<string> | undefined;
-  readmitToolNames: Set<string>;
-  sessionTools: string[] | undefined;
-  sessionExcludeTools: string[] | undefined;
-}
-
-/**
- * Resolve the run model before the prompt is built: append-mode inheritance
- * depends on the provider, and a bridge provider needs the parent prompt verbatim.
- */
-function resolveRunModel(
-  ctx: ExtensionContext,
-  type: SubagentType,
-  agentConfig: AgentConfig | undefined,
-  settingsManager: SettingsManager,
-  options: RunOptions,
-): ReturnType<typeof resolveDefaultModel> {
-  if (options.resumeSessionFile !== undefined) return options.model;
-  let model = options.model ?? resolveDefaultModel(
-    ctx.model, ctx.modelRegistry, agentConfig?.model,
-  );
-  if (!options.model && !agentConfig?.model) {
-    const defaultModel = settingsManager.getDefaultModel?.();
-    if (defaultModel) {
-      const provider = settingsManager.getDefaultProvider?.() ?? ctx.model?.provider ?? "";
-      const found = ctx.modelRegistry.find(provider, defaultModel);
-      if (found) model = found;
-    }
-  }
-
-  if (!options.model && agentConfig?.model && resolveDefaultModel(undefined, ctx.modelRegistry, agentConfig.model) === undefined) {
-    const slashIdx = agentConfig.model.indexOf("/");
-    const notFound = slashIdx === -1
-      || !ctx.modelRegistry.find(agentConfig.model.slice(0, slashIdx), agentConfig.model.slice(slashIdx + 1));
-    options.onToolActivity?.({
-      type: "warning",
-      toolName: `model-error:model "${agentConfig.model}" pinned by agent "${type}" is ${notFound ? "not a known model" : "unavailable (provider not authenticated or model disabled)"} — running on the parent model instead`,
-    });
-  }
-
-  return model;
-}
-
-/**
- * SRP Phase 3: Model resolution, custom tools creation (nested, ask, structured), and tool admission calculation.
- */
-function buildSessionToolLoadout(
-  ctx: ExtensionContext,
-  type: SubagentType,
-  agentConfig: AgentConfig | undefined,
-  loader: DefaultResourceLoader,
-  toolNames: string[],
-  extNames: Set<string>,
-  mcpToolPatterns: string[] | undefined,
-  noExtensions: boolean,
-  nested: PreparedNestedTools,
-  model: ReturnType<typeof resolveDefaultModel>,
-  options: RunOptions,
-): SessionToolLoadout {
-  const isolated = agentConfig?.isolated ?? options.isolated;
-
-  const thinkingLevel = options.resumeSessionFile === undefined
-    ? (options.thinkingLevel ?? agentConfig?.thinking ?? ctx.thinkingLevel)
-    : options.thinkingLevel;
-
-  const { disallowedSet, tools: nestedTools } = nested;
-
-  const askTools = options.nestedRuntime && !isolated && !nestedTools.some((tool: any) => tool.name === "ask_parent")
-    ? createAskAnswerTools({
-        manager: options.nestedRuntime.manager,
-        pi: options.pi,
-        parentAgentId: options.nestedRuntime.parentAgentId,
-      })
-    : [];
-  const nestedToolNames = new Set([...nestedTools, ...askTools].map((tool: any) => tool.name));
-
-  const structuredCapture = options.structuredOutput ? createStructuredCapture() : undefined;
-  const structuredTools = options.structuredOutput && structuredCapture
-    ? [createStructuredOutputTool(options.structuredOutput, structuredCapture)]
-    : [];
-  const structuredToolNames = new Set(structuredTools.map((tool: any) => tool.name));
-  const readmitToolNames = new Set<string>([
-    ...[...nestedToolNames].filter((name: string) => !disallowedSet?.has(name)),
-    ...structuredToolNames,
-  ]);
-
-  const builtinToolNameSet = new Set(toolNames);
-
-  // As in Claude Code, refuse an agent whose `tools:` list resolved to nothing
-  if (options.resumeSessionFile === undefined) {
-    const loadedNames = new Set(
-      loader
-        .getExtensions()
-        .extensions.filter((e) => e.path !== `<inline:${SCOPE_GATE_NAME}>`)
-        .flatMap((e) => extensionCanonicalNames(e.path)),
-    );
-    const unrecognized = agentConfig?.builtinToolNames?.filter((n) => !BUILTIN_TOOL_NAMES.includes(n)) ?? [];
-    const unmatched = [...extNames].filter((n) => !loadedNames.has(n));
-    const extensionToolsPossible =
-      loadedNames.size > 0 &&
-      (extNames.size === 0 || unmatched.length < extNames.size || !!mcpToolPatterns);
-    if (
-      (unrecognized.length > 0 || unmatched.length > 0) &&
-      toolNames.every((n) => !BUILTIN_TOOL_NAMES.includes(n) || disallowedSet?.has(n)) &&
-      readmitToolNames.size === 0 &&
-      !extensionToolsPossible
-    ) {
-      const reasons = [
-        unrecognized.length > 0 ? `unrecognized [${unrecognized.join(", ")}]` : "",
-        unmatched.length > 0
-          ? `recognized but matched no tools in this session [${unmatched.map((n) => `ext:${n}`).join(", ")}]`
-          : "",
-      ].filter(Boolean);
-      throw new Error(
-        `Agent '${type}' would be spawned with zero tools — refusing. Its tools list resolved to nothing: ` +
-          `${reasons.join("; ")}. Fix the agent's tools frontmatter or pass a different subagent_type.`,
-      );
-    }
-  }
-
-  let sessionTools: string[] | undefined;
-  let sessionExcludeTools: string[] | undefined;
-  if (noExtensions) {
-    sessionTools = [
-      ...toolNames.filter(
-        (t: string) => !EXCLUDED_TOOL_NAMES.includes(t) && !disallowedSet?.has(t),
-      ),
-      ...[...nestedToolNames].filter((t: string) => !disallowedSet?.has(t)),
-      ...structuredToolNames,
-    ];
-  } else {
-    const denyTools = new Set<string>(
-      EXCLUDED_TOOL_NAMES.filter((t) => !nestedToolNames.has(t)),
-    );
-    for (const name of BUILTIN_TOOL_NAMES) {
-      if (!builtinToolNameSet.has(name)) denyTools.add(name);
-    }
-    if (disallowedSet) {
-      for (const name of disallowedSet) {
-        if (!structuredToolNames.has(name)) denyTools.add(name);
-      }
-    }
-    sessionExcludeTools = [...denyTools];
-  }
-
-  return {
-    model,
-    thinkingLevel,
-    nestedTools,
-    askTools,
-    structuredTools,
-    structuredCapture,
-    disallowedSet,
-    readmitToolNames,
-    sessionTools,
-    sessionExcludeTools,
-  };
-}
+  buildSessionToolLoadout,
+  resolveRunModel,
+  type SessionToolLoadout,
+} from "./runner-tools.js";
+import type { RunOptions, RunResult } from "./runner-types.js";
 
 interface CreateSessionParams {
   ctx: ExtensionContext;
@@ -581,11 +89,11 @@ interface CreateSessionParams {
   agentDir: string;
   loader: DefaultResourceLoader;
   sessionSettingsManager: SettingsManager;
-  model: any;
-  thinkingLevel: any;
+  model: Model<any> | undefined;
+  thinkingLevel: EffectiveThinkingLevel | undefined;
   sessionTools: string[] | undefined;
   sessionExcludeTools: string[] | undefined;
-  customTools: any[];
+  customTools: ToolDefinition[];
   noExtensions: boolean;
   nestedCallGate: NestedCallGate;
   toolNames: string[];
@@ -725,6 +233,56 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
 
   // Durable Registry setup
   const registry = createRegistry();
+  // Shared lifecycle handlers for durable tool bridging
+  const toolBridgeOptions = {
+    beforeToolCall: (context: any, signal?: AbortSignal) =>
+      (session as any).agent?.beforeToolCall?.(context, signal),
+    afterToolCall: (context: any, signal?: AbortSignal) =>
+      (session as any).agent?.afterToolCall?.(context, signal),
+    onToolStart: (info: { toolName: string; toolCallId: string; args: any }) => {
+      (session as any)._emit?.({
+        type: "tool_execution_start",
+        toolName: info.toolName,
+        toolCallId: info.toolCallId,
+        args: info.args,
+      });
+    },
+    onToolUpdate: (info: { toolName: string; toolCallId: string; args: any; partialResult: any }) => {
+      (session as any)._emit?.({
+        type: "tool_execution_update",
+        toolName: info.toolName,
+        toolCallId: info.toolCallId,
+        args: info.args,
+        partialResult: info.partialResult,
+      });
+    },
+    onToolResult: (resMsg: any) => {
+      session.messages.push(resMsg);
+      (session as any)._emit?.({ type: "message_start", message: resMsg });
+      (session as any)._emit?.({ type: "message_end", message: resMsg });
+      (session as any)._emit?.({
+        type: "tool_execution_end",
+        toolName: resMsg.toolName,
+        toolCallId: resMsg.toolCallId,
+        result: resMsg,
+        isError: resMsg.isError === true,
+      });
+    },
+    signal: options.signal,
+    resolveCallId: (toolName: string, api: any) => {
+      const lastAssistant =
+        (session.state?.streamingMessage?.role === "assistant" ? session.state.streamingMessage : undefined) ??
+        ([...session.messages].reverse().find((m: any) => m.role === "assistant") as any);
+      const pendingCall = lastAssistant?.content?.find(
+        (c: any) =>
+          c.type === "toolCall" &&
+          c.name === toolName &&
+          !session.messages.some((m: any) => m.role === "toolResult" && m.toolCallId === (c.id ?? c.toolUseId)),
+      );
+      return api?.callId ?? pendingCall?.id ?? pendingCall?.toolUseId;
+    },
+  };
+
   // Option B: Install CodingTools with live activity forwarding
   const rawCodingTools = [
     createReadTool(),
@@ -732,143 +290,8 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
     createEditTool(),
     createBashTool(),
   ].filter((tool) => toolNames.includes(tool.name));
-  const codingTools = rawCodingTools.map((tool) => {
-    const origExecute = tool.execute.bind(tool);
-    return {
-      ...tool,
-      execute: async (input: any, api: any, context: any) => {
-        const lastAssistant =
-          (session.state?.streamingMessage?.role === "assistant" ? session.state.streamingMessage : undefined) ??
-          ([...session.messages].reverse().find((m: any) => m.role === "assistant") as any);
-        const pendingCall = lastAssistant?.content?.find(
-          (c: any) =>
-            c.type === "toolCall" &&
-            c.name === tool.name &&
-            !session.messages.some((m: any) => m.role === "toolResult" && m.toolCallId === (c.id ?? c.toolUseId)),
-        );
-        const callId = api?.callId ?? pendingCall?.id ?? pendingCall?.toolUseId ?? `tool_${Date.now()}`;
-
-        if ((session as any).agent?.beforeToolCall) {
-          const decision = await (session as any).agent.beforeToolCall(
-            { toolCall: { type: "toolCall", id: callId, name: tool.name, arguments: input }, args: input },
-            options.signal,
-          );
-          if (decision?.block) {
-            throw new Error(decision.reason ?? `Tool call blocked: ${tool.name}`);
-          }
-        }
-        if (options.signal?.aborted) {
-          throw new Error("Aborted");
-        }
-
-        (session as any)._emit?.({ type: "tool_execution_start", toolCallId: callId, toolName: tool.name, args: input });
-
-        let accumulatedOutput = "";
-        const wrappedApi = api
-          ? {
-              ...api,
-              output: (chunk: string, skipped?: boolean) => {
-                api.output?.(chunk, skipped);
-                if (chunk) {
-                  accumulatedOutput += chunk;
-                  (session as any)._emit?.({
-                    type: "tool_execution_update",
-                    toolCallId: callId,
-                    toolName: tool.name,
-                    args: input,
-                    partialResult: {
-                      content: [{ type: "text", text: accumulatedOutput }],
-                    },
-                  });
-                }
-              },
-            }
-          : api;
-
-        let toolResult: any;
-        try {
-          let res: Awaited<ReturnType<typeof origExecute>>;
-          try {
-            res = await origExecute(input, wrappedApi, context);
-          } catch (error) {
-            res = {
-              output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
-              isError: true,
-            };
-          }
-          let content: any[] = [];
-          if (Array.isArray((res as any)?.output)) {
-            content = (res as any).output;
-          } else if (typeof (res as any)?.output === "string") {
-            content = [{ type: "text", text: (res as any).output }];
-          } else if (typeof (res as any)?.structuredOutput?.output === "string") {
-            content = [{ type: "text", text: (res as any).structuredOutput.output }];
-          } else if (typeof api?.retainedOutput === "function" && api.retainedOutput()?.text) {
-            content = [{ type: "text", text: api.retainedOutput().text }];
-          } else if (accumulatedOutput) {
-            content = [{ type: "text", text: accumulatedOutput }];
-          } else if (typeof res === "string") {
-            content = [{ type: "text", text: res }];
-          }
-
-          const details = (res as any)?.details ?? (res as any)?.structuredOutput;
-          const isError = (res as any)?.isError === true;
-          toolResult = {
-            role: "toolResult" as const,
-            toolCallId: callId,
-            toolName: tool.name,
-            content,
-            details,
-            isError,
-            usage: res?.usage,
-            timestamp: Date.now(),
-          };
-          if ((session as any).agent?.afterToolCall) {
-            const hookOverride = await (session as any).agent.afterToolCall(
-              {
-                toolCall: { type: "toolCall", id: callId, name: tool.name, arguments: input },
-                args: input,
-                result: toolResult,
-                isError,
-              },
-              options.signal,
-            );
-            toolResult.content = hookOverride?.content ?? toolResult.content;
-            toolResult.details = hookOverride?.details ?? toolResult.details;
-            toolResult.isError = hookOverride?.isError ?? toolResult.isError;
-            toolResult.usage = hookOverride?.usage ?? toolResult.usage;
-          }
-          session.messages.push(toolResult as any);
-          (session as any)._emit?.({ type: "message_start", message: toolResult });
-          (session as any)._emit?.({ type: "message_end", message: toolResult });
-          return { ...res, output: toolResult.content, details: toolResult.details, isError: toolResult.isError, usage: toolResult.usage };
-        } catch (err: any) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          toolResult = {
-            role: "toolResult" as const,
-            toolCallId: callId,
-            toolName: tool.name,
-            content: [{ type: "text", text: errorMsg }],
-            isError: true,
-            timestamp: Date.now(),
-          };
-          session.messages.push(toolResult as any);
-          (session as any)._emit?.({ type: "message_start", message: toolResult });
-          (session as any)._emit?.({ type: "message_end", message: toolResult });
-          return { output: toolResult.content, isError: true };
-        } finally {
-          (session as any)._emit?.({
-            type: "tool_execution_end",
-            toolCallId: callId,
-            toolName: tool.name,
-            result: toolResult,
-            isError: toolResult?.isError === true,
-          });
-        }
-      },
-    };
-  });
-  registry.install(defineExtension({ name: "coding-tools", tools: codingTools as any }));
+  const codingTools = rawCodingTools.map((tool) => bridgeDurableTool(tool, toolBridgeOptions));
+  registry.install(defineExtension({ name: "coding-tools", tools: codingTools }));
 
   // Extract all active session tools (MCP tools, extension tools, custom tools, nested subagent tools)
   const activeToolNames = session.getActiveToolNames();
@@ -888,40 +311,7 @@ async function createDurableRegistryAndSession(params: CreateSessionParams): Pro
       };
       durableBridgedTools.push(
         bridgePiToolToDurableTool(toolToBridge as any, {
-          beforeToolCall: (context, signal) =>
-            (session as any).agent?.beforeToolCall?.(context, signal),
-          afterToolCall: (context, signal) =>
-            (session as any).agent?.afterToolCall?.(context, signal),
-          onToolStart: (info) => {
-            (session as any)._emit?.({
-              type: "tool_execution_start",
-              toolName: info.toolName,
-              toolCallId: info.toolCallId,
-              args: info.args,
-            });
-          },
-          onToolUpdate: (info) => {
-            (session as any)._emit?.({
-              type: "tool_execution_update",
-              toolName: info.toolName,
-              toolCallId: info.toolCallId,
-              args: info.args,
-              partialResult: info.partialResult,
-            });
-          },
-          onToolResult: (resMsg) => {
-            session.messages.push(resMsg);
-            (session as any)._emit?.({ type: "message_start", message: resMsg });
-            (session as any)._emit?.({ type: "message_end", message: resMsg });
-            (session as any)._emit?.({
-              type: "tool_execution_end",
-              toolName: resMsg.toolName,
-              toolCallId: resMsg.toolCallId,
-              result: resMsg,
-              isError: resMsg.isError === true,
-            });
-          },
-          signal: options.signal,
+          ...toolBridgeOptions,
           toolContext: (callId: string) =>
             (session as any)._extensionRunner?.createToolContext(callId, options.signal) ?? ctx,
         }),

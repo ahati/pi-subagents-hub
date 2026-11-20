@@ -39,9 +39,8 @@ import { reopenTarget, worktreeLost } from "../agent-record-entry.js";
 import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
 import { normalizeToolName } from "../custom-agents.js";
 import { createActivityTracker } from "../entry/activity.js";
-import { resolveModel } from "../model-resolver.js";
-import { checkModelScope } from "../model-scope.js";
 import type { ToolActivity } from "../runner/runner-types.js";
+import { resolveAndScopeModel } from "../tools/subagent-tool-core.js";
 import type { AgentRecord, ThinkingLevel } from "../types.js";
 import type { AgentActivity } from "../ui/agent-widget.js";
 import { getLifetimeTotal } from "../usage.js";
@@ -345,17 +344,8 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       // definition's is next, and the parent's is the floor. A model the script
       // named and we cannot resolve is an error; one the definition named falls
       // back to the parent silently, because the script never asked for it.
-      let model = ctx.model;
       const config = getAgentConfig(dispatch.type);
       const modelInput = request.model ?? config?.model;
-      if (modelInput !== undefined) {
-        const resolved = resolveModel(modelInput, ctx.modelRegistry);
-        if (typeof resolved === "string") {
-          if (request.model !== undefined) return { ok: false, error: resolved };
-        } else {
-          model = resolved;
-        }
-      }
 
       // Same scopeModels policy as the Agent tool and the nested delegation
       // tools: a script's `agent({ model })` is a runtime LLM choice, and the
@@ -364,22 +354,25 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       // and NOT `modelInput` — the latter has already absorbed the agent file's
       // own `model:`, which is user-authored config and so earns the
       // warn-and-proceed branch rather than a refusal.
-      const scopeVerdict = checkModelScope({
-        model,
-        cwd: ctx.cwd,
-        modelRegistry: ctx.modelRegistry,
-        callerSupplied: request.model !== undefined,
-        agentLabel: config?.displayName ?? dispatch.type,
+      const modelResult = resolveAndScopeModel({
         modelInput,
+        callerSupplied: request.model !== undefined,
+        fallbackModel: ctx.model,
+        modelRegistry: ctx.modelRegistry,
+        cwd: ctx.cwd,
+        agentLabel: config?.displayName ?? dispatch.type,
+        onWarn: (message) => {
+          if (!warnedScopeMessages.has(message)) {
+            warnedScopeMessages.add(message);
+            ctx.ui.notify(message, "warning");
+          }
+        },
       });
       // This agent's failure, not the run's — the same shape a bad agent type
       // takes above. The script sees `null` and its siblings carry on, which is
       // the difference between one refused model and a discarded fan-out.
-      if (scopeVerdict.kind === "error") return { ok: false, error: scopeVerdict.message };
-      if (scopeVerdict.kind === "warn" && !warnedScopeMessages.has(scopeVerdict.message)) {
-        warnedScopeMessages.add(scopeVerdict.message);
-        ctx.ui.notify(scopeVerdict.message, "warning");
-      }
+      if (!modelResult.success) return { ok: false, error: modelResult.error };
+      const model = modelResult.model;
 
       /**
        * The gate's verdict, set only if the hook below actually ran the command.

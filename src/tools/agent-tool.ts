@@ -32,6 +32,7 @@ import type { FleetList } from "../ui/fleet-list.js";
 import { getLifetimeCost } from "../usage.js";
 import { renderAgentToolCall, renderAgentToolResult } from "./agent-tool-render.js";
 import { buildAgentToolDescription, buildAgentToolParams } from "./agent-tool-schema.js";
+import { resolveAndScopeModel } from "./subagent-tool-core.js";
 
 /** UI and presentation services required by the Agent tool for status updates and widgets. */
 export interface AgentToolPresentationDeps {
@@ -185,7 +186,7 @@ export function createAgentTool(deps: AgentToolDeps) {
         defaultRunInBackground: getBackgroundByDefault(),
       });
 
-      let model: Model<any> | undefined = reopenOptions !== undefined ? undefined : ctx.model;
+      let model: Model<any> | undefined;
       if (reopenOptions !== undefined) {
         // The saved record's model wins over the parent's; fall back to the
         // fuzzy resolver only when the exact id is no longer registered.
@@ -193,25 +194,29 @@ export function createAgentTool(deps: AgentToolDeps) {
           ? undefined
           : findRegisteredModel(saved.modelId, ctx.modelRegistry) ?? resolveModel(saved.modelId, ctx.modelRegistry);
         model = typeof savedModel === "string" ? undefined : savedModel;
-      } else if (resolvedConfig.modelInput) {
-        const resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
-        if (typeof resolved === "string") {
-          if (resolvedConfig.modelFromParams) return textResult(resolved);
-        } else {
-          model = resolved;
-        }
+        const scopeVerdict = checkModelScope({
+          model,
+          cwd: ctx.cwd,
+          modelRegistry: ctx.modelRegistry,
+          callerSupplied: false,
+          agentLabel: customConfig?.displayName ?? subagentType,
+          modelInput: saved?.modelId,
+        });
+        if (scopeVerdict.kind === "error") return textResult(scopeVerdict.message);
+        if (scopeVerdict.kind === "warn") ctx.ui.notify(scopeVerdict.message, "warning");
+      } else {
+        const modelResult = resolveAndScopeModel({
+          modelInput: resolvedConfig.modelInput,
+          callerSupplied: resolvedConfig.modelFromParams,
+          fallbackModel: ctx.model,
+          modelRegistry: ctx.modelRegistry,
+          cwd: ctx.cwd,
+          agentLabel: customConfig?.displayName ?? subagentType,
+          onWarn: (msg) => ctx.ui.notify(msg, "warning"),
+        });
+        if (!modelResult.success) return textResult(modelResult.error);
+        model = modelResult.model;
       }
-
-      const scopeVerdict = checkModelScope({
-        model,
-        cwd: ctx.cwd,
-        modelRegistry: ctx.modelRegistry,
-        callerSupplied: reopenOptions === undefined && resolvedConfig.modelFromParams,
-        agentLabel: customConfig?.displayName ?? subagentType,
-        modelInput: reopenOptions === undefined ? resolvedConfig.modelInput : saved?.modelId,
-      });
-      if (scopeVerdict.kind === "error") return textResult(scopeVerdict.message);
-      if (scopeVerdict.kind === "warn") ctx.ui.notify(scopeVerdict.message, "warning");
 
       const thinking = reopenOptions !== undefined
         ? (saved?.thinking && saved.thinking !== "off" ? saved.thinking : undefined)

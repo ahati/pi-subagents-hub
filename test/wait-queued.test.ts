@@ -10,7 +10,10 @@
  * queues, call the real tool with wait:true, drain the queue, and assert the
  * call returns the final result.
  */
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -91,6 +94,28 @@ async function spawnBackground(tools: Map<string, any>): Promise<{ id: string; q
 }
 
 describe("get_subagent_result wait:true on a queued agent", () => {
+  // The tests boot the real extension, whose concurrency limit comes from the
+  // settings it loads out of PI_CODING_AGENT_DIR. Without isolation the limit
+  // is whatever the user's global subagents.json says; the queue hunt below
+  // only works while that limit stays under 20 spawns.
+  let tmpAgentDir: string;
+  let originalAgentDir: string | undefined;
+
+  beforeAll(() => {
+    tmpAgentDir = mkdtempSync(join(tmpdir(), "pi-wait-queued-"));
+    originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = tmpAgentDir;
+  });
+
+  afterAll(() => {
+    if (originalAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    }
+    rmSync(tmpAgentDir, { recursive: true, force: true });
+  });
+
   it("waits through queue start and returns the result (no 'still running')", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
