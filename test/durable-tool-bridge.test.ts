@@ -297,6 +297,67 @@ describe("bridgeDurableTool", () => {
 });
 
 describe("bridgeDurableTool full result contract", () => {
+  it("propagates a ToolPark untouched, without firing end hooks", async () => {
+    const park = { sleep: { until: 1234, checkpoint: { phase: 1 } } };
+    const mockParkingTool: ToolRegistration = defineTool({
+      name: "wait_for_signal",
+      description: "Park until a signal arrives",
+      parameters: {},
+      replay: "safe",
+      async execute() {
+        return park;
+      },
+    });
+
+    const starts: unknown[] = [];
+    const updates: Array<{ toolName: string; toolCallId: string; partialResult: any }> = [];
+    const results: unknown[] = [];
+    const bridged = bridgeDurableTool(mockParkingTool, {
+      onToolStart: (info) => starts.push(info),
+      onToolUpdate: (info) => updates.push(info),
+      onToolResult: (res) => results.push(res),
+    });
+
+    const res = await bridged.execute({}, { output: vi.fn(), callId: "park-1" } as any, BACKGROUND_CONTEXT);
+
+    expect(res).toBe(park);
+    // The call is not over: onToolStart fired, but no result was reported —
+    // both end hooks run again when pi-durable re-runs execute() on wake.
+    expect(starts).toHaveLength(1);
+    expect(results).toHaveLength(0);
+    // One status line as the call's live output, naming when it wakes.
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({ toolName: "wait_for_signal", toolCallId: "park-1" });
+    expect(updates[0].partialResult.content).toEqual([
+      { type: "text", text: `parked until ${new Date(1234).toLocaleTimeString()} — the call resumes on wake` },
+    ]);
+  });
+
+  it("keeps streamed output above the park note and names watched signals", async () => {
+    const mockParkingTool: ToolRegistration = defineTool({
+      name: "wait_for_approval",
+      description: "Park until approved",
+      parameters: {},
+      replay: "safe",
+      async execute(_args: any, api: any) {
+        api.output("draft ready");
+        return { sleep: { signals: [{ signal: "approval", key: "pr-7" }] } };
+      },
+    });
+
+    const updates: Array<{ partialResult: any }> = [];
+    const bridged = bridgeDurableTool(mockParkingTool, {
+      onToolUpdate: (info) => updates.push(info),
+    });
+
+    await bridged.execute({}, { output: vi.fn(), callId: "park-2" } as any, BACKGROUND_CONTEXT);
+
+    // The streamed chunk's cumulative update, then the park note appended to it.
+    expect(updates[updates.length - 1].partialResult.content).toEqual([
+      { type: "text", text: "draft ready\nparked for approval — the call resumes on wake" },
+    ]);
+  });
+
   it("preserves structuredOutput and diagnostics from the native tool's result", async () => {
     const structuredOutput = { kind: "read", path: "/tmp/x" };
     const diagnostics = [{ path: "/tmp/x", line: 1 }];

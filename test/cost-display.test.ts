@@ -177,7 +177,7 @@ describe("cost display", () => {
     function render(pi: any, details: any): string {
       const [, renderer] = pi.registerMessageRenderer.mock.calls[0];
       const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
-      return renderer({ details }, { expanded: false }, theme).render().join("\n");
+      return renderer({ details }, { expanded: false }, theme).render(80).join("\n");
     }
 
     const agent = (description: string, totalTokens: number, totalCost: number) => ({

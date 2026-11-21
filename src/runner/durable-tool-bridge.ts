@@ -5,7 +5,7 @@
 import type { Context } from "@earendil-works/chord/context";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
-import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { defineTool, type ToolPark, type ToolRegistration } from "@earendil-works/pi-durable";
 
 /**
  * The JSON value union chord's tool signature takes. Declared here because
@@ -65,12 +65,40 @@ interface ToolExecutionCoreParams {
   fullResult?: boolean;
 }
 
-async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promise<{
-  output: ToolResultMessage["content"];
-  isError: boolean;
-  details: JsonValue;
-  usage?: any;
-}> {
+/**
+ * A park is not a result: pi-durable re-runs `execute()` once the call wakes, so
+ * it must flow back untouched instead of gaining an `output`. Results declare
+ * `sleep`/`wait` as `never`; only a park carries either as an object.
+ */
+function isToolPark(value: unknown): value is ToolPark {
+  if (typeof value !== "object" || value === null) return false;
+  const { sleep, wait } = value as { sleep?: unknown; wait?: unknown };
+  return (typeof sleep === "object" && sleep !== null) || (typeof wait === "object" && wait !== null);
+}
+
+/**
+ * One bounded line describing a park, shown as the call's live output until it
+ * wakes — a suspended call is otherwise indistinguishable from a hung one.
+ */
+function parkNote(park: ToolPark): string {
+  if (park.wait) {
+    const n = park.wait.on.length;
+    return `parked — waiting for ${n} task${n === 1 ? "" : "s"} to settle`;
+  }
+  const until = park.sleep?.until !== undefined ? ` until ${new Date(park.sleep.until).toLocaleTimeString()}` : "";
+  const signals = park.sleep?.signals?.length ? ` for ${park.sleep.signals.map((s) => s.signal).join(", ")}` : "";
+  return `parked${until}${signals} — the call resumes on wake`;
+}
+
+async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promise<
+  | {
+      output: ToolResultMessage["content"];
+      isError: boolean;
+      details: JsonValue;
+      usage?: any;
+    }
+  | ToolPark
+> {
   const { toolName, args, api, options, invoke, fullResult } = params;
   const callId =
     (api as any)?.callId ??
@@ -129,6 +157,10 @@ async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promis
       isError: true,
     };
   }
+
+  // A parked call is not a result: the harness re-runs `execute()` on wake, so
+  // the shaping and end hooks below must not fire — they run again on that re-run.
+  if (isToolPark(rawResult)) return rawResult;
 
   const output: ToolResultMessage["content"] = Array.isArray(rawResult?.content)
     ? (rawResult.content as ToolResultMessage["content"])
@@ -285,6 +317,20 @@ export function bridgeDurableTool(
             : api;
 
           const res = await tool.execute(args, wrappedApi as any, chordCtx);
+          if (isToolPark(res)) {
+            // The call is suspended, not finished: one status line as its live
+            // output, keeping anything already streamed above it.
+            const note = parkNote(res);
+            options.onToolUpdate?.({
+              toolName: tool.name,
+              toolCallId: callId,
+              args,
+              partialResult: {
+                content: [{ type: "text", text: accumulatedOutput ? `${accumulatedOutput}\n${note}` : note }],
+              },
+            });
+            return res;
+          }
           // Master's coding-tools chain: a returned output wins, the retained
           // stream only when nothing came back, accumulated output next, and a
           // bare-string result last.
@@ -295,10 +341,11 @@ export function bridgeDurableTool(
               ? res.structuredOutput
               : undefined;
           let content: ToolResultMessage["content"] = [];
-          if (Array.isArray(res?.output)) {
-            content = res.output;
-          } else if (typeof res?.output === "string") {
-            content = [{ type: "text" as const, text: res.output }];
+          const rawOutput: unknown = res?.output;
+          if (Array.isArray(rawOutput)) {
+            content = rawOutput;
+          } else if (typeof rawOutput === "string") {
+            content = [{ type: "text" as const, text: rawOutput }];
           } else if (typeof structured?.output === "string") {
             content = [{ type: "text" as const, text: structured.output }];
           } else if (typeof api?.retainedOutput === "function" && api.retainedOutput()?.text) {
