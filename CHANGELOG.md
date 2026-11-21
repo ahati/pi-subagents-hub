@@ -9,6 +9,8 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+## [2026.11.211] - 2026-11-21
+
 ### Fixed
 
 - **A bridged tool's `ToolPark` now propagates untouched.** pi-durable 1.6.0 tools may park a call (returning `sleep`/`wait`) so the harness re-runs `execute()` on wake; the durable tool bridge used to reshape the park into an empty result, killing the suspension. A park now flows back unchanged and skips the end hooks, which fire again on the re-run, and the call's live output line gains a one-line "parked …" status through the existing update channel so a suspension is not indistinguishable from a hang. No bundled coding tool parks today, so none of this is reachable yet.
