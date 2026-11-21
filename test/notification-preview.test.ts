@@ -37,7 +37,7 @@ describe("the notification card's collapsed result preview", () => {
       id: "scout", description: "scout", status: "completed", toolUses: 1,
       turnCount: 1, totalTokens: 1000, totalCost: 0, durationMs: 1000, resultPreview,
     };
-    return renderer({ details }, { expanded }, theme).render().join("\n");
+    return renderer({ details }, { expanded }, theme).render(80).join("\n");
   }
 
   it("collapses pretty-printed JSON to one line instead of a bare `{`", () => {

@@ -9,6 +9,9 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **pi 1.6.0 compatibility.** pi-tui 1.6.0 components return a `readonly string[]` from `render()` (and `Container` hands back a cached array), and pi-durable 1.6.0's `Tool.execute` can return a `ToolPark`; the conversation viewer's markdown path and the durable tool bridge no longer assume a mutable `string[]` result. Dev and runtime `@earendil-works/*` dependencies move to `^1.6.0` so the check suite runs against the current pi; peer ranges stay `>=1.5.0`.
 ## [2026.11.201] - 2026-11-20
 
 ### Fixed

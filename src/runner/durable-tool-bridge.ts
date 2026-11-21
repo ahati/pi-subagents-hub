@@ -295,10 +295,11 @@ export function bridgeDurableTool(
               ? res.structuredOutput
               : undefined;
           let content: ToolResultMessage["content"] = [];
-          if (Array.isArray(res?.output)) {
-            content = res.output;
-          } else if (typeof res?.output === "string") {
-            content = [{ type: "text" as const, text: res.output }];
+          const rawOutput: unknown = res?.output;
+          if (Array.isArray(rawOutput)) {
+            content = rawOutput;
+          } else if (typeof rawOutput === "string") {
+            content = [{ type: "text" as const, text: rawOutput }];
           } else if (typeof structured?.output === "string") {
             content = [{ type: "text" as const, text: structured.output }];
           } else if (typeof api?.retainedOutput === "function" && api.retainedOutput()?.text) {

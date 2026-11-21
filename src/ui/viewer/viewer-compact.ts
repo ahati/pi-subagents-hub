@@ -154,7 +154,7 @@ function renderMarkdownLines(
   markdown: WeakMap<object, MarkdownCacheEntry>,
   markdownTheme: MarkdownTheme,
   theme: Theme,
-): string[] {
+): readonly string[] {
   let entry = markdown.get(msg);
   if (!entry) {
     entry = {
