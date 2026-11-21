@@ -9,6 +9,8 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+## [2026.11.212] - 2026-11-21
+
 ### Changed
 
 - **BREAKING: pi 1.6.0 or newer is required.** The peer dependency floor for the pi host packages (`pi-coding-agent`, `pi-agent-core`, `pi-ai`, `pi-tui`) rises from `>=1.5.0` to `>=1.6.0`, matching the API baseline the extension compiles against — readonly `render()` output and pi-durable `ToolPark` — since no backward compatibility is kept. Upgrade pi to 1.6.0 or newer; npm flags an older pi at install time. The CI floor job pins all four host packages together so its tree stays single-version.
