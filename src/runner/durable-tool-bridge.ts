@@ -5,7 +5,7 @@
 import type { Context } from "@earendil-works/chord/context";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
-import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { defineTool, type ToolPark, type ToolRegistration } from "@earendil-works/pi-durable";
 
 /**
  * The JSON value union chord's tool signature takes. Declared here because
@@ -65,12 +65,26 @@ interface ToolExecutionCoreParams {
   fullResult?: boolean;
 }
 
-async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promise<{
-  output: ToolResultMessage["content"];
-  isError: boolean;
-  details: JsonValue;
-  usage?: any;
-}> {
+/**
+ * A park is not a result: pi-durable re-runs `execute()` once the call wakes, so
+ * it must flow back untouched instead of gaining an `output`. Results declare
+ * `sleep`/`wait` as `never`; only a park carries either as an object.
+ */
+function isToolPark(value: unknown): value is ToolPark {
+  if (typeof value !== "object" || value === null) return false;
+  const { sleep, wait } = value as { sleep?: unknown; wait?: unknown };
+  return (typeof sleep === "object" && sleep !== null) || (typeof wait === "object" && wait !== null);
+}
+
+async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promise<
+  | {
+      output: ToolResultMessage["content"];
+      isError: boolean;
+      details: JsonValue;
+      usage?: any;
+    }
+  | ToolPark
+> {
   const { toolName, args, api, options, invoke, fullResult } = params;
   const callId =
     (api as any)?.callId ??
@@ -129,6 +143,10 @@ async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promis
       isError: true,
     };
   }
+
+  // A parked call is not a result: the harness re-runs `execute()` on wake, so
+  // the shaping and end hooks below must not fire — they run again on that re-run.
+  if (isToolPark(rawResult)) return rawResult;
 
   const output: ToolResultMessage["content"] = Array.isArray(rawResult?.content)
     ? (rawResult.content as ToolResultMessage["content"])
@@ -285,6 +303,7 @@ export function bridgeDurableTool(
             : api;
 
           const res = await tool.execute(args, wrappedApi as any, chordCtx);
+          if (isToolPark(res)) return res;
           // Master's coding-tools chain: a returned output wins, the retained
           // stream only when nothing came back, accumulated output next, and a
           // bare-string result last.

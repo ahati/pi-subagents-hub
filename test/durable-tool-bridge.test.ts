@@ -297,6 +297,34 @@ describe("bridgeDurableTool", () => {
 });
 
 describe("bridgeDurableTool full result contract", () => {
+  it("propagates a ToolPark untouched, without firing end hooks", async () => {
+    const park = { sleep: { until: 1234, checkpoint: { phase: 1 } } };
+    const mockParkingTool: ToolRegistration = defineTool({
+      name: "wait_for_signal",
+      description: "Park until a signal arrives",
+      parameters: {},
+      replay: "safe",
+      async execute() {
+        return park;
+      },
+    });
+
+    const starts: unknown[] = [];
+    const results: unknown[] = [];
+    const bridged = bridgeDurableTool(mockParkingTool, {
+      onToolStart: (info) => starts.push(info),
+      onToolResult: (res) => results.push(res),
+    });
+
+    const res = await bridged.execute({}, { output: vi.fn(), callId: "park-1" } as any, BACKGROUND_CONTEXT);
+
+    expect(res).toBe(park);
+    // The call is not over: onToolStart fired, but no result was reported —
+    // both end hooks run again when pi-durable re-runs execute() on wake.
+    expect(starts).toHaveLength(1);
+    expect(results).toHaveLength(0);
+  });
+
   it("preserves structuredOutput and diagnostics from the native tool's result", async () => {
     const structuredOutput = { kind: "read", path: "/tmp/x" };
     const diagnostics = [{ path: "/tmp/x", line: 1 }];
