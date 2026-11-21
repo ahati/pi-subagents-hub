@@ -11,7 +11,7 @@ check the entries below for behaviour changes.
 
 ### Fixed
 
-- **A bridged tool's `ToolPark` now propagates untouched.** pi-durable 1.6.0 tools may park a call (returning `sleep`/`wait`) so the harness re-runs `execute()` on wake; the durable tool bridge used to reshape the park into an empty result, killing the suspension. A park now flows back unchanged and skips the end hooks, which fire again on the re-run. No bundled coding tool parks today, so nothing user-visible changes.
+- **A bridged tool's `ToolPark` now propagates untouched.** pi-durable 1.6.0 tools may park a call (returning `sleep`/`wait`) so the harness re-runs `execute()` on wake; the durable tool bridge used to reshape the park into an empty result, killing the suspension. A park now flows back unchanged and skips the end hooks, which fire again on the re-run, and the call's live output line gains a one-line "parked …" status through the existing update channel so a suspension is not indistinguishable from a hang. No bundled coding tool parks today, so none of this is reachable yet.
 - **pi 1.6.0 compatibility.** pi-tui 1.6.0 components return a `readonly string[]` from `render()` (and `Container` hands back a cached array), and pi-durable 1.6.0's `Tool.execute` can return a `ToolPark`; the conversation viewer's markdown path and the durable tool bridge no longer assume a mutable `string[]` result. Dev and runtime `@earendil-works/*` dependencies move to `^1.6.0` so the check suite runs against the current pi; peer ranges stay `>=1.5.0`.
 ## [2026.11.201] - 2026-11-20
 

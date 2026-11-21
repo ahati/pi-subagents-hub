@@ -76,6 +76,20 @@ function isToolPark(value: unknown): value is ToolPark {
   return (typeof sleep === "object" && sleep !== null) || (typeof wait === "object" && wait !== null);
 }
 
+/**
+ * One bounded line describing a park, shown as the call's live output until it
+ * wakes — a suspended call is otherwise indistinguishable from a hung one.
+ */
+function parkNote(park: ToolPark): string {
+  if (park.wait) {
+    const n = park.wait.on.length;
+    return `parked — waiting for ${n} task${n === 1 ? "" : "s"} to settle`;
+  }
+  const until = park.sleep?.until !== undefined ? ` until ${new Date(park.sleep.until).toLocaleTimeString()}` : "";
+  const signals = park.sleep?.signals?.length ? ` for ${park.sleep.signals.map((s) => s.signal).join(", ")}` : "";
+  return `parked${until}${signals} — the call resumes on wake`;
+}
+
 async function executeWithToolLifecycle(params: ToolExecutionCoreParams): Promise<
   | {
       output: ToolResultMessage["content"];
@@ -303,7 +317,20 @@ export function bridgeDurableTool(
             : api;
 
           const res = await tool.execute(args, wrappedApi as any, chordCtx);
-          if (isToolPark(res)) return res;
+          if (isToolPark(res)) {
+            // The call is suspended, not finished: one status line as its live
+            // output, keeping anything already streamed above it.
+            const note = parkNote(res);
+            options.onToolUpdate?.({
+              toolName: tool.name,
+              toolCallId: callId,
+              args,
+              partialResult: {
+                content: [{ type: "text", text: accumulatedOutput ? `${accumulatedOutput}\n${note}` : note }],
+              },
+            });
+            return res;
+          }
           // Master's coding-tools chain: a returned output wins, the retained
           // stream only when nothing came back, accumulated output next, and a
           // bare-string result last.
