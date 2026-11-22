@@ -83,4 +83,16 @@ describe("createHubTheme", () => {
     expect(derived.fgColors.text).toBe("#ffffff");
     expect(derived.options.appearance).toBe("dark");
   });
+
+  // pi hands overlay factories a theme Proxy with only a get trap, so `in`
+  // checks forward to an empty target. The derivation must still accept it.
+  it("accepts the get-trap theme proxy pi passes to overlays", () => {
+    const proxied = new Proxy({}, { get: (_target, prop) => Reflect.get(dark, prop) });
+    const derived = createHubTheme(proxied as unknown as typeof dark, "beige", light) as unknown as {
+      bgColors: Record<string, string>;
+      fgColors: Record<string, string>;
+    };
+    expect(derived.bgColors.toolPendingBg).toBe("#d7d2c3");
+    expect(derived.fgColors.text).toBe("#222222");
+  });
 });

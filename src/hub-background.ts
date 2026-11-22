@@ -50,9 +50,12 @@ type ThemeSource = {
 };
 
 function isThemeSource(value: unknown): value is ThemeSource {
-  return typeof value === "object" && value !== null
-    && "colors" in value && typeof value.colors === "object" && value.colors !== null
-    && "getColorMode" in value && typeof value.getColorMode === "function";
+  // Property READS, not `in`: pi hands overlays a theme Proxy with only a get
+  // trap, so `in` (has) forwards to an empty target and false-negatives.
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<ThemeSource>;
+  return typeof candidate.colors === "object" && candidate.colors !== null
+    && typeof candidate.getColorMode === "function";
 }
 
 /**
