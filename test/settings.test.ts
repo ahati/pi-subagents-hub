@@ -217,6 +217,15 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
   });
 
+  it("round-trips hubBackground; accepts presets and hex, drops invalid", () => {
+    saveSettings({ hubBackground: "beige" }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ hubBackground: "beige" });
+    saveSettings({ hubBackground: "#aabbcc" }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ hubBackground: "#aabbcc" });
+    writeGlobal({ hubBackground: "chartreuse" } as any);
+    expect(loadSettings(projectDir)).toEqual({}); // invalid color dropped
+  });
+
   it("round-trips viewerStyle; keeps valid values, drops invalid", () => {
     saveSettings({ viewerStyle: "compact" }, projectDir);
     expect(loadSettings(projectDir)).toEqual({ viewerStyle: "compact" });
@@ -720,6 +729,7 @@ describe("settings persistence", () => {
         setPackageWorkflows: vi.fn(),
         setUncutPromptProviders: vi.fn(),
         setUIStyle: vi.fn(),
+        setHubBackground: vi.fn(),
         setViewerStyle: vi.fn(),
       };
     });
@@ -884,6 +894,13 @@ describe("settings persistence", () => {
       expect(appliers.setUIStyle).toHaveBeenCalledWith("claude");
       applySettings({}, appliers);
       expect(appliers.setUIStyle).toHaveBeenCalledTimes(1); // absence is "use default"
+    });
+
+    it("applies hubBackground; skips it when absent", () => {
+      applySettings({ hubBackground: "#d7d2c3" }, appliers);
+      expect(appliers.setHubBackground).toHaveBeenCalledWith("#d7d2c3");
+      applySettings({}, appliers);
+      expect(appliers.setHubBackground).toHaveBeenCalledTimes(1); // absence is "use default"
     });
 
     it("applies viewerStyle; skips it when absent", () => {

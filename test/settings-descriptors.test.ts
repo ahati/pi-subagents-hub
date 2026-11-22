@@ -41,6 +41,8 @@ function makeMockDeps(): SettingsMenuDeps {
     setShowModel: vi.fn(),
     getUIStyle: vi.fn(() => "pi"),
     setUIStyle: vi.fn(),
+    getHubBackground: vi.fn(() => "blue"),
+    setHubBackground: vi.fn(),
     getViewerStyle: vi.fn(() => "chat"),
     setViewerStyle: vi.fn(),
     isFleetViewEnabled: vi.fn(() => true),
@@ -90,7 +92,7 @@ describe("settings-descriptors", () => {
   });
 
   it("defines complete and unique descriptors", () => {
-    expect(SETTINGS_DESCRIPTORS.length).toBe(31);
+    expect(SETTINGS_DESCRIPTORS.length).toBe(32);
     expect(SETTINGS_DESCRIPTORS_BY_ID.size).toBe(SETTINGS_DESCRIPTORS.length);
 
     const ids = new Set<string>();
@@ -109,6 +111,23 @@ describe("settings-descriptors", () => {
     for (const id of expectedNumeric) {
       expect(NUMERIC_SETTINGS_IDS.has(id)).toBe(true);
     }
+  });
+
+  it("applies hubBackground presets and custom hex", () => {
+    const desc = SETTINGS_DESCRIPTORS_BY_ID.get("hubBackground")!;
+    expect(desc).toBeDefined();
+    expect(desc.getValues?.(makeMockDeps())).toContain("custom…");
+    const deps = makeMockDeps();
+    const ctx = makeMockCtx();
+
+    desc.apply("beige", ctx, deps);
+    desc.apply("#123456", ctx, deps);
+    desc.apply("not-a-color", ctx, deps);
+    expect(deps.setHubBackground).toHaveBeenCalledTimes(2);
+    expect(deps.setHubBackground).toHaveBeenNthCalledWith(1, "beige");
+    expect(deps.setHubBackground).toHaveBeenNthCalledWith(2, "#123456");
+    expect(desc.parseText?.("  #ABCDEF  ")).toBe("#abcdef");
+    expect(desc.parseText?.("chartreuse")).toBeUndefined();
   });
 
   it("applies maxConcurrent setting change", () => {

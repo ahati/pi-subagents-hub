@@ -181,6 +181,8 @@ export interface AgentHubDeps {
   scrollbarMode?: () => ScrollViewScrollbar;
   backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction;
   uiStyle?: () => UIStyle;
+  /** Overrides the theme handed to the hub so its window can use a custom background. */
+  hubTheme?: (base: Theme) => Theme;
   /** Transcript rendering for the hub's conversation viewer; read at render time. */
   viewerStyle?: () => ViewerStyle;
 }

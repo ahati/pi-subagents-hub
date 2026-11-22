@@ -106,6 +106,14 @@ export type JoinMode = 'async' | 'group' | 'smart';
 export type UIStyle = 'pi' | 'claude';
 
 /**
+ * Background for the AgentHub window in `pi` UI style.
+ * - `theme`: keep the active theme's `toolPendingBg` token.
+ * - `beige` / `blue`: the bundled light presets; text switches to a dark palette.
+ * - `#RRGGBB`: a custom color; light colors also switch the text to a dark palette.
+ */
+export type HubBackground = 'theme' | 'beige' | 'blue' | `#${string}`;
+
+/**
  * How the conversation viewer renders a subagent transcript.
  * - `chat`: pi's main-screen message components (the same tree the main window
  *   renders) — transcripts look and stream like main-chat output.

@@ -9,6 +9,10 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Configurable AgentHub background.** `hubBackground` (default `blue`, #c2e6fa) offers `beige` (#d7d2c3), `theme` for the previous themed panel, and any six-digit `#RRGGBB`; `/agents → Settings → Hub background` prompts for a custom hex value. Light backgrounds derive the hub a dark-on-light palette so text and selection stay readable, while the conversation viewer, widget, fleet rows and `uiStyle: "claude"` keep the active theme. Exact hex requires a truecolor terminal; 256-color terminals approximate it.
+
 ## [2026.11.212] - 2026-11-21
 
 ### Changed

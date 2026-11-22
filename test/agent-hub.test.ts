@@ -660,6 +660,40 @@ describe("agent hub open modes", () => {
     h.components.at(-1)?.dispose?.();
   });
 
+  it("uses the hub theme factory in pi style so a custom background reaches the frame", () => {
+    const customTheme = {
+      fg: (_c: string, s: string) => s,
+      bold: (s: string) => s,
+      bg: (c: string, s: string) => `[bg:${c}]${s}[/bg]`,
+    };
+    const hubTheme = vi.fn(() => ({
+      ...customTheme,
+      bg: (_c: string, s: string) => `[bg:hub]${s}[/bg]`,
+    }));
+    const h = harness([makeRecord({ id: "a1" })], { uiStyle: () => "pi", hubTheme }, { theme: customTheme });
+    h.open({ popup: false });
+    expect(h.rawFrame(120)[0]).toBe("[bg:hub]" + "\u2594".repeat(120) + "[/bg]");
+    expect(hubTheme).toHaveBeenCalledWith(customTheme);
+    h.components.at(-1)?.dispose?.();
+  });
+
+  it("keeps the host theme for claude style even when a hub theme is supplied", () => {
+    const customTheme = {
+      fg: (_c: string, s: string) => s,
+      bold: (s: string) => s,
+      bg: (c: string, s: string) => `[bg:${c}]${s}[/bg]`,
+    };
+    const hubTheme = vi.fn(() => ({
+      ...customTheme,
+      bg: (_c: string, s: string) => `[bg:hub]${s}[/bg]`,
+    }));
+    const h = harness([makeRecord({ id: "a1" })], { uiStyle: () => "claude", hubTheme }, { theme: customTheme });
+    h.open({ popup: false });
+    expect(h.rawFrame(120)[0]).not.toContain("[bg:hub]");
+    expect(hubTheme).not.toHaveBeenCalled();
+    h.components.at(-1)?.dispose?.();
+  });
+
   it("styles borders and default panel background with toolPendingBg under uiStyle: pi", () => {
     const customTheme = {
       fg: (_c: string, s: string) => s,

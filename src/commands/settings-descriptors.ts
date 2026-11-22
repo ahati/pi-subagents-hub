@@ -20,6 +20,7 @@ import {
   setFallbackSubagent,
 } from "../agent-types.js";
 import { getCacheRetention, setCacheRetention } from "../cache-retention.js";
+import { CUSTOM_HUB_BACKGROUND, sanitizeHubBackground } from "../hub-background.js";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "../model-scope.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "../nested-tools.js";
 import {
@@ -42,6 +43,7 @@ import {
 import type {
   AgentMentionMode,
   CacheRetentionSetting,
+  HubBackground,
   JoinMode,
   UIStyle,
   ViewerStyle,
@@ -77,6 +79,8 @@ export interface SettingsMenuDeps {
   setShowModel: (b: boolean) => void;
   getUIStyle: () => UIStyle;
   setUIStyle: (s: UIStyle) => void;
+  getHubBackground: () => HubBackground;
+  setHubBackground: (value: HubBackground) => void;
   getViewerStyle: () => ViewerStyle;
   setViewerStyle: (s: ViewerStyle) => void;
   isFleetViewEnabled: () => boolean;
@@ -104,6 +108,11 @@ export interface SettingDescriptor {
   readonly description: string | ((deps: SettingsMenuDeps) => string);
   readonly isNumeric?: boolean;
   readonly numericPromptLabel?: string;
+  /** A free-text row: one advertised value opens an input prompt. */
+  readonly isText?: boolean;
+  readonly textPromptLabel?: string;
+  /** Normalize typed text to a storable value; undefined rejects the input. */
+  parseText?(value: string): string | undefined;
   getValues?(deps: SettingsMenuDeps): readonly string[];
   getCurrent(deps: SettingsMenuDeps): string;
   apply(value: string, ctx: ExtensionCommandContext, deps: SettingsMenuDeps): void;
@@ -152,6 +161,7 @@ export function snapshotSettings(deps: SettingsMenuDeps) {
     showCost: deps.isShowCostEnabled(),
     showModel: deps.isShowModelEnabled(),
     uiStyle: deps.getUIStyle(),
+    hubBackground: deps.getHubBackground(),
     viewerStyle: deps.getViewerStyle(),
     fleetView: deps.isFleetViewEnabled(),
     agentMentions: deps.getAgentMentionMode(),
@@ -623,6 +633,23 @@ export const SETTINGS_DESCRIPTORS: readonly SettingDescriptor[] = [
     },
   },
   {
+    id: "hubBackground",
+    label: "Hub background",
+    description:
+      "AgentHub window background in pi UI style: theme keeps the active theme's tool panel color; beige (#d7d2c3) and blue (#c2e6fa) are light presets with dark text; custom… takes any six-digit #RRGGBB. Claude style keeps its own chrome. Applied the next time the hub opens.",
+    getValues: () => ["theme", "beige", "blue", CUSTOM_HUB_BACKGROUND],
+    getCurrent: (deps) => deps.getHubBackground(),
+    isText: true,
+    textPromptLabel: "Hub background (#RRGGBB):",
+    parseText: (value) => sanitizeHubBackground(value),
+    apply: (value, ctx, deps) => {
+      const background = sanitizeHubBackground(value);
+      if (!background) return;
+      deps.setHubBackground(background);
+      notifyApplied(ctx, `Hub background set to ${background}`, deps);
+    },
+  },
+  {
     id: "viewerStyle",
     label: "Viewer style",
     description:
@@ -699,4 +726,8 @@ export const SETTINGS_DESCRIPTORS_BY_ID = new Map<string, SettingDescriptor>(
 
 export const NUMERIC_SETTINGS_IDS = new Set<string>(
   SETTINGS_DESCRIPTORS.filter((d) => d.isNumeric).map((d) => d.id),
+);
+
+export const TEXT_SETTINGS_IDS = new Set<string>(
+  SETTINGS_DESCRIPTORS.filter((d) => d.isText).map((d) => d.id),
 );

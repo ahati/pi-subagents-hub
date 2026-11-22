@@ -43,9 +43,10 @@ const DOWN = "\x1b[B";
  * the menu. Records the keys sent to the page, what it rendered, and every
  * numeric editor the page opens.
  */
-function driveSettings(keys: string[]) {
+function driveSettings(keys: string[], inputValues: string[] = []) {
   const page = { screen: "", lines: [] as string[], closed: false };
-  const input = vi.fn(async () => undefined as string | undefined);
+  let inputIndex = 0;
+  const input = vi.fn(async () => inputValues[inputIndex++] as string | undefined);
   let menusAnswered = 0;
   const custom = vi.fn((factory: (...args: any[]) => any) => new Promise<any>((resolve) => {
     const kb = {
@@ -119,6 +120,18 @@ describe("/agents → Settings filter", () => {
 
     expect(input).toHaveBeenCalledWith("Grace turns (1+)", "5");
     expect(input).not.toHaveBeenCalledWith("Max concurrency (1+)", "10");
+  });
+
+  it("custom hub background opens a hex prompt and applies the value", async () => {
+    const { context, command, input } = driveSettings([..."hub", ENTER], ["#112233"]);
+
+    await command.handler("", context);
+
+    expect(input).toHaveBeenCalledWith("Hub background (#RRGGBB):", "blue");
+    expect(context.ui.notify).toHaveBeenCalledWith(
+      "Hub background set to #112233",
+      expect.any(String),
+    );
   });
 
   it("Enter after moving down a filtered list opens the row under the cursor", async () => {

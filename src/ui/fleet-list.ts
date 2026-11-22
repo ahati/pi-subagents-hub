@@ -230,6 +230,8 @@ export class FleetList {
      * conversation viewer and the `Agent` tool result.
      */
     private showModel: () => boolean = () => false,
+    /** Derives the hub's own theme when its background overrides the active one. */
+    private hubTheme?: (base: Theme) => Theme,
   ) {}
 
   // ---- Lifecycle ----
@@ -718,6 +720,7 @@ export class FleetList {
         backgroundAction: this.backgroundAction,
         uiStyle: this.uiStyle,
         viewerStyle: this.viewerStyle,
+        hubTheme: this.hubTheme,
       },
       { agentId: initial.agentId, runId: initial.runId },
     ).finally(() => {

@@ -198,6 +198,11 @@ export class AgentHub implements Component, HubPaneHost, HubLogHost, AgentHubInp
     public deps: AgentHubDeps,
     initial: { popup: boolean; resume: HubResumeState; onToggle: () => void },
   ) {
+    // Only pi style paints the window's `toolPendingBg` surface. Claude style
+    // keeps the host theme: its light text would be unreadable on a light panel.
+    this.theme = this.effectiveStyle() === "pi" && this.deps.hubTheme
+      ? this.deps.hubTheme(theme)
+      : theme;
     this.popup = initial.popup;
     this.resume = initial.resume;
     this.onToggle = initial.onToggle;

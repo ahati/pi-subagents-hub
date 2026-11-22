@@ -10,7 +10,8 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
-import type { AgentMentionMode, CacheRetentionSetting, JoinMode, UIStyle, ViewerStyle } from "./types.js";
+import { sanitizeHubBackground } from "./hub-background.js";
+import type { AgentMentionMode, CacheRetentionSetting, HubBackground, JoinMode, UIStyle, ViewerStyle } from "./types.js";
 import { MAX_WORKTREE_TIMEOUT_SECONDS, MIN_WORKTREE_TIMEOUT_SECONDS } from "./worktree.js";
 
 export type { UIStyle };
@@ -360,6 +361,13 @@ export interface SubagentsSettings {
    */
   uiStyle?: UIStyle;
   /**
+   * Agent hub background in `pi` UI style: `theme` (the active theme's token),
+   * `beige` (#d7d2c3), `blue` (#c2e6fa), or any six-digit `#RRGGBB`.
+   * Light colors switch the hub's text to a dark palette so it stays readable.
+   * Defaults to `blue`; set `theme` to restore the previous appearance.
+   */
+  hubBackground?: HubBackground;
+  /**
    * How the conversation viewer renders a subagent transcript:
    * - `chat` (default): pi's main-screen message components — the same tree the
    *   main window renders, so transcripts look and stream like main-chat output.
@@ -452,6 +460,7 @@ export interface SettingsAppliers {
   setShowCost: (b: boolean) => void;
   setShowModel: (b: boolean) => void;
   setUIStyle: (style: UIStyle) => void;
+  setHubBackground: (background: HubBackground) => void;
   setViewerStyle: (style: ViewerStyle) => void;
   setPackageAgents: (gate: boolean | string[]) => void;
   setPackageWorkflows: (gate: boolean | string[]) => void;
@@ -626,6 +635,8 @@ function sanitize(raw: unknown): SubagentsFileSettings {
   if (typeof r.uiStyle === "string" && VALID_UI_STYLES.has(r.uiStyle)) {
     out.uiStyle = r.uiStyle as UIStyle;
   }
+  const hubBackground = sanitizeHubBackground(r.hubBackground);
+  if (hubBackground) out.hubBackground = hubBackground;
   if (typeof r.viewerStyle === "string" && VALID_VIEWER_STYLES.has(r.viewerStyle)) {
     out.viewerStyle = r.viewerStyle as ViewerStyle;
   }
@@ -793,6 +804,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.showCost === "boolean") appliers.setShowCost(s.showCost);
   if (typeof s.showModel === "boolean") appliers.setShowModel(s.showModel);
   if (s.uiStyle) appliers.setUIStyle(s.uiStyle);
+  if (s.hubBackground) appliers.setHubBackground(s.hubBackground);
   if (s.viewerStyle) appliers.setViewerStyle(s.viewerStyle);
   if (typeof s.workflowsEnabled === "boolean") appliers.setWorkflowsEnabled(s.workflowsEnabled);
   if (s.packageAgents !== undefined) appliers.setPackageAgents(s.packageAgents);

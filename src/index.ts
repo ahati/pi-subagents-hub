@@ -85,6 +85,7 @@ import {
   createHandoffWatcher,
   registerSessionLifecycle,
 } from "./entry/session-lifecycle.js";
+import { createHubTheme, DEFAULT_HUB_BACKGROUND } from "./hub-background.js";
 import { resolveModel } from "./model-resolver.js";
 import { setScopeModelsEnabled } from "./model-scope.js";
 import {
@@ -122,6 +123,7 @@ import {
 import type {
   AgentMentionMode,
   AgentRecord,
+  HubBackground,
   JoinMode,
   NotificationDetails,
   UIStyle,
@@ -130,6 +132,7 @@ import type {
 import {
   type AgentActivity,
   AgentWidget,
+  type Theme,
 } from "./ui/agent-widget.js";
 import { FleetList } from "./ui/fleet-list.js";
 import {
@@ -336,6 +339,14 @@ export default function (pi: ExtensionAPI) {
   function getUIStyle(): UIStyle { return uiStyle; }
   function setUIStyle(s: UIStyle): void { uiStyle = s; widget.update(); fleet.update(); }
 
+  let hubBackground: HubBackground = bootSettings.hubBackground ?? DEFAULT_HUB_BACKGROUND;
+  function getHubBackground(): HubBackground { return hubBackground; }
+  function setHubBackground(value: HubBackground): void { hubBackground = value; }
+  /** pi's light theme supplies dark-on-light text for the light hub backgrounds. */
+  function hubThemeFor(base: Theme): Theme {
+    return createHubTheme(base, hubBackground, currentCtx?.ui.getTheme("light") as Theme | undefined);
+  }
+
   let viewerStyle: ViewerStyle = bootSettings.viewerStyle ?? "chat";
   function getViewerStyle(): ViewerStyle { return viewerStyle; }
   function setViewerStyle(s: ViewerStyle): void { viewerStyle = s; fleet.update(); }
@@ -359,6 +370,7 @@ export default function (pi: ExtensionAPI) {
     getUIStyle,
     getViewerStyle,
     isShowModelEnabled,
+    hubThemeFor,
   );
 
   fleet.setLifecycleActions({
@@ -463,6 +475,7 @@ export default function (pi: ExtensionAPI) {
     setUncutPromptProviders,
     setUIStyle,
     setViewerStyle,
+    setHubBackground,
   };
   const emitSettings = (event: string, payload: unknown) => pi.events.emit(event, payload);
 
@@ -684,6 +697,8 @@ export default function (pi: ExtensionAPI) {
     setShowModel,
     getUIStyle,
     setUIStyle,
+    getHubBackground,
+    setHubBackground,
     getViewerStyle,
     setViewerStyle,
     isFleetViewEnabled,
