@@ -849,6 +849,11 @@ export class AgentManager {
     for (const [id, record] of this.registry.agents) {
       if (record.status === "running" || record.status === "queued" || record.status === "paused") continue;
       if ((record.completedAt ?? 0) >= cutoff) continue;
+      // A nested child runs in memory, so eviction is final, and its parent is
+      // its only reader: keep it while the parent stays, resumable and
+      // collectable by id (#475). The map is in spawn order, so the sweep that
+      // evicts the parent reaches its children after.
+      if (record.parentAgentId !== undefined && this.registry.agents.has(record.parentAgentId)) continue;
       // Retain unconsumed results: the timer bounds memory after a result is
       // read, it does not expire a result the model has not retrieved yet.
       if (!record.resultConsumed) continue;

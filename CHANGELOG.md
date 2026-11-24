@@ -9,6 +9,11 @@ check the entries below for behaviour changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A finished nested agent stays while its parent's record lives.** The 10-minute sweep could evict a child the parent had already read while that parent was still running, so a later `Agent({ resume })` or `get_subagent_result` from the parent reported it as gone. It is now kept until the sweep that evicts its parent reaches it. Unread children were already exempt — this fork's timer never expires an unconsumed result. ([tintinweb/pi-subagents#475](https://github.com/tintinweb/pi-subagents/issues/475) — thanks [@hazydream](https://github.com/hazydream))
+- **The README's nested-subagent contract matches the shipped behavior again.** The feature list and the headless section still said background nested children are stopped when their parent ends; they report to it and the parent waits — the behavior this fork already has. ([tintinweb/pi-subagents#476](https://github.com/tintinweb/pi-subagents/pull/476))
+
 ## [2026.11.212] - 2026-11-21
 
 ### Changed
