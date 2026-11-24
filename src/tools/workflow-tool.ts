@@ -129,8 +129,14 @@ export function notifyWorkflowFinished(
   fleet: FleetList,
   outbox: CompletionOutbox,
 ): void {
-  widget.update();
-  fleet.update();
+  // These touch the captured UI, which throws once the session that owned it
+  // was replaced (/new, /reload — #309); the notification still proceeds.
+  try {
+    widget.update();
+    fleet.update();
+  } catch {
+    /* stale UI: the session these would redraw is gone */
+  }
   const result = workflowResultText(task);
   const message = {
     content: formatWorkflowNotification(task),
@@ -463,9 +469,11 @@ export function runWorkflowFlag(
   workflowTasks: Map<string, WorkflowTask>,
   widget: AgentWidget,
   fleet: FleetList,
+  outbox: CompletionOutbox,
   isWorkflowsEnabled: () => boolean,
   state: { workflowFlagHandled: boolean },
   trackRun?: (run: Promise<void>) => void,
+  isSessionEnded?: () => boolean,
 ): void {
   if (state.workflowFlagHandled) return;
   const flag = pi.getFlag(WORKFLOW_FILE_FLAG);
@@ -514,15 +522,47 @@ export function runWorkflowFlag(
   fleet.update();
   report(`Running workflow ${meta.name}…`, "info");
 
+  // Detached, alongside the session like a user's own turns: session_start is
+  // awaited by the host, and a workflow can run for minutes. When it finishes
+  // it notifies the model through the same outbox a background SubagentWorkflow
+  // uses, so the model can react — under `-p` the headless drain keeps the run
+  // open until then.
+  const workflowName = meta.name;
   const run = runWorkflowTask(pi, ctx, manager, agentActivity, task).then(() => {
-    pi.appendEntry<WorkflowEntryData>(WORKFLOW_ENTRY_TYPE, workflowEntryData(task));
-    pi.sendMessage({
-      customType: "workflow-result",
-      content: formatWorkflowNotification(task),
-      display: false,
-    }, { deliverAs: "nextTurn" });
-    widget.update();
-    fleet.update();
+    // Stopped by session_shutdown: the session is gone, so there is no card to
+    // save and no model to tell.
+    if (isSessionEnded?.()) return;
+    // No tool call to attach a result card to, so the card becomes a session
+    // entry (same layout). A run that settles after the session was replaced
+    // holds a stale `pi`, which throws on append (#309).
+    try {
+      pi.appendEntry<WorkflowEntryData>(WORKFLOW_ENTRY_TYPE, workflowEntryData(task));
+    } catch (err) {
+      console.warn(
+        `[pi-subagents-hub] Workflow ${workflowName} finished, but its result card could not be saved: ` +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
+    if (ctx.mode === "print" || ctx.mode === "json") {
+      // -p / JSON: no user turn follows, so the drain delivers this — route it
+      // through the outbox the drain consumes.
+      notifyWorkflowFinished(task, widget, fleet, outbox);
+    } else {
+      // Interactive: a user-launched startup workflow is not a reply to
+      // anything. Hand its result to the model as context for the next user
+      // turn rather than waking an idle session. The redraws sit inside
+      // `notifyWorkflowFinished`'s guard on the tool path; here the surfaces
+      // are the session's own and get the same protection.
+      try {
+        widget.update();
+        fleet.update();
+        pi.sendMessage({
+          customType: "workflow-result",
+          content: formatWorkflowNotification(task),
+          display: false,
+        }, { deliverAs: "nextTurn" });
+      } catch { /* stale pi */ }
+    }
   });
   trackRun?.(run);
   void run;

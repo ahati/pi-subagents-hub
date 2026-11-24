@@ -1116,8 +1116,19 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
 
     await booted.lifecycle.get("session_shutdown")?.({}, workflowCtx());
 
-    const sent = await awaitNotification(startedTaskId(result));
-    expect(String(sent[0].content)).toContain("<status>Stopped</status>");
+    // The worker is killed and the run settles — and its "stopped" completion
+    // is dropped rather than delivered, since the outbox is disposed with the
+    // session it would have steered. Claude Code's `-p` does the same.
+    await vi.waitFor(
+      () => expect(booted.pi.events.emit).toHaveBeenCalledWith(
+        "subagents:workflow_settled",
+        expect.objectContaining({ id: startedTaskId(result), status: "killed" }),
+      ),
+      { timeout: 10_000 },
+    );
+    await flush();
+    expect(booted.pi.sendMessage.mock.calls.some((c: any[]) => String(c[0]?.content).includes(startedTaskId(result))))
+      .toBe(false);
   });
 
   it("reports a script that threw, rather than a run that quietly ended", async () => {
@@ -1290,6 +1301,97 @@ describe("--subagents-workflow-file", () => {
     expect(sent, "the run's outcome must reach the model").toBeTruthy();
     expect(sent![1]).toMatchObject({ deliverAs: "nextTurn" });
     expect(String(sent![0].content)).toContain("<result>all clear</result>");
+  });
+
+  // A run that is still going whenever the test looks: busy work in the worker,
+  // stopped only by the run's abort signal. (`Date.now()` is off-limits in scripts.)
+  const busyScript =
+    'export const meta = { name: "busy", description: "runs until stopped" };\n' +
+    "let n = 0; for (let i = 0; i < 1e12; i++) n += i;\nreturn n;\n";
+
+  it("delivers through the completion outbox under -p, not as next-turn context that never comes", async () => {
+    // Under `pi -p` no user turn follows the run, so `deliverAs: "nextTurn"`
+    // would drop the result on the floor; the headless drain takes it from the
+    // outbox and answers with it.
+    const path = join(hermetic.dir, "flow.js");
+    writeFileSync(path, `${fileScript}return "all clear";\n`);
+    const booted = makePi({ [WORKFLOW_FILE_FLAG]: path });
+    subagentsExtension(booted.pi);
+    const context = ctx({ mode: "print", cwd: hermetic.dir });
+
+    await booted.lifecycle.get("session_start")?.({}, context);
+
+    // The card is saved in every mode; only the delivery channel differs.
+    await vi.waitFor(
+      () => expect(booted.pi.appendEntry).toHaveBeenCalledWith(WORKFLOW_ENTRY_TYPE, expect.objectContaining({ name: "from-file" })),
+      { timeout: 10_000 },
+    );
+    // The notification is the outbox's hold-then-steer, not a nextTurn handoff.
+    await vi.waitFor(
+      () => expect(booted.pi.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ customType: "subagent-notification" }),
+        expect.objectContaining({ deliverAs: "steer" }),
+      ),
+      { timeout: 2_000 },
+    );
+    expect(booted.pi.sendMessage.mock.calls.some((c: any[]) => c[0]?.customType === "workflow-result")).toBe(false);
+    const notified = booted.pi.sendMessage.mock.calls.find((c: any[]) => c[0]?.customType === "subagent-notification")!;
+    expect(String(notified[0].content)).toContain("all clear");
+  });
+
+  it("skips the delivery entirely when the session has shut down", async () => {
+    const path = join(hermetic.dir, "busy.js");
+    writeFileSync(path, busyScript);
+    const booted = makePi({ [WORKFLOW_FILE_FLAG]: path });
+    subagentsExtension(booted.pi);
+    const context = uiCtx();
+
+    await booted.lifecycle.get("session_start")?.({}, context);
+    await booted.lifecycle.get("session_shutdown")?.({ reason: "quit" }, context);
+
+    // The abort has to reach the worker before the delivery could fire, or the
+    // assertions below would pass vacuously.
+    await vi.waitFor(
+      () => expect(booted.pi.events.emit).toHaveBeenCalledWith("subagents:workflow_settled", expect.anything()),
+      { timeout: 5_000 },
+    );
+    await flush();
+
+    expect(booted.pi.appendEntry).not.toHaveBeenCalledWith(WORKFLOW_ENTRY_TYPE, expect.anything());
+    expect(booted.pi.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("warns on stderr when a headless -p flag run is stopped with no prompt", async () => {
+    // `pi -p` with no prompt never starts a run, so a flag workflow has no turn
+    // to report into. Claude Code's `-p` refuses to run without input; say so
+    // rather than stop it silently.
+    const path = join(hermetic.dir, "busy.js");
+    writeFileSync(path, busyScript);
+    const booted = makePi({ [WORKFLOW_FILE_FLAG]: path });
+    subagentsExtension(booted.pi);
+    const context = ctx({ mode: "print", cwd: hermetic.dir });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await booted.lifecycle.get("session_start")?.({}, context);
+    await booted.lifecycle.get("session_shutdown")?.({ reason: "quit" }, context);
+
+    expect(stderr.mock.calls.some(c => String(c[0]).includes("--subagents-workflow-file under -p needs a prompt")))
+      .toBe(true);
+  });
+
+  it("does not warn when a run had started, so the flag run reports into it", async () => {
+    const path = join(hermetic.dir, "busy.js");
+    writeFileSync(path, busyScript);
+    const booted = makePi({ [WORKFLOW_FILE_FLAG]: path });
+    subagentsExtension(booted.pi);
+    const context = ctx({ mode: "print", cwd: hermetic.dir });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await booted.lifecycle.get("session_start")?.({}, context);
+    booted.lifecycle.get("agent_start")?.({}, context);
+    await booted.lifecycle.get("session_shutdown")?.({ reason: "quit" }, context);
+
+    expect(stderr.mock.calls.some(c => String(c[0]).includes("needs a prompt"))).toBe(false);
   });
 
   it("renders the persisted entry through the shared workflow card layout", async () => {

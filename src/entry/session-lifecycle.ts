@@ -65,6 +65,8 @@ export interface AgentLifecycleFeatures {
   runWorkflowFlag: (ctx: ExtensionContext) => void;
   registerMentionProvider: (ctx: ExtensionContext) => void;
   registerTurnGroup: () => void;
+  /** First thing on a real teardown: a workflow settling afterwards has no session to report into, and a prompt-less headless flag run is warned about. */
+  onSessionTeardown: (reason: string | undefined, ctx: ExtensionContext | undefined) => void;
 }
 
 /** Unified dependency contract for session lifecycle coordination (composes segregated ISP interfaces). */
@@ -162,6 +164,7 @@ export function registerSessionLifecycle(
     isSchedulingEnabled,
     resolveWorkflowCollisions,
     runWorkflowFlag,
+    onSessionTeardown,
     registerMentionProvider,
     spawnTopLevel,
     ownsManagerRegistry,
@@ -305,6 +308,10 @@ export function registerSessionLifecycle(
       }
       return;
     }
+    // Before anything is aborted: a workflow that settles during teardown has
+    // no session left to report into (its delivery skips itself), and a
+    // prompt-less headless flag run is warned about before it is stopped.
+    onSessionTeardown(event?.reason, shutdownCtx);
     // Every channel the handle holds, rather than a hand-kept list: a list is
     // how a newly added channel gets left subscribed across a reload.
     for (const unsub of Object.values(rpcHandle ?? {})) unsub();

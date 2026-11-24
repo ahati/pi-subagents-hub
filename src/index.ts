@@ -582,6 +582,10 @@ export default function (pi: ExtensionAPI) {
   const isHeadless = (ctx: ExtensionContext) => ctx.mode === "print" || ctx.mode === "json";
   const hasBackgroundWork = () => manager.hasRunning() || workflowRuns.size > 0;
   const allBackgroundWorkSettled = () => Promise.allSettled([manager.waitForAll(), ...workflowRuns]);
+  /** A `-p` with no prompt never starts a run, so nothing can drain into one. */
+  let runStarted = false;
+  /** Set at session_shutdown, which stops every workflow; one settling afterwards has no session to report to. */
+  let sessionEnded = false;
   function describeBackgroundWork(): string {
     const agents = manager.listAgents()
       .filter(r => isTopLevelAgent(r) && (r.status === "running" || r.status === "queued")).length;
@@ -591,8 +595,15 @@ export default function (pi: ExtensionAPI) {
     ].filter(Boolean).join(", ");
   }
 
+  pi.on("agent_start", () => { runStarted = true; });
+
   pi.on("agent_before_settle", async (event, ctx) => {
     if (!isHeadless(ctx) || !hasBackgroundWork()) return;
+    // A failed or aborted final turn ends the run; forcing a continuation into
+    // it would reopen a run pi is tearing down (mirrors CompletionOutbox.onTurnEnd,
+    // which suppresses on "aborted"/"error"). pi already short-circuits the abort
+    // case before this boundary; guarding it too is harmless and symmetric.
+    if (event.outcome !== "completed") return;
     process.stderr.write(
       `[pi-subagents] Waiting for background work to finish (${describeBackgroundWork()}). Press Ctrl+C to exit now.\n`,
     );
@@ -636,6 +647,25 @@ export default function (pi: ExtensionAPI) {
       continue: true,
     };
   });
+
+  /**
+   * Headless teardown bookkeeping, called first when a session is really going
+   * down (never on the mid-session main-turn switch): a workflow settling after
+   * this point has no session to report into, so its delivery skips itself.
+   */
+  const onSessionTeardown = (reason: string | undefined, shutdownCtx: ExtensionContext | undefined): void => {
+    sessionEnded = true;
+    // `pi -p` with no prompt never starts a run, so a flag workflow has no turn
+    // to report into and is stopped below. Claude Code's `-p` refuses to run
+    // without input; say so rather than stop it silently.
+    if (workflowRuns.size > 0 && !runStarted && reason === "quit" && shutdownCtx !== undefined && isHeadless(shutdownCtx)) {
+      process.stderr.write(
+        `[pi-subagents] --${WORKFLOW_FILE_FLAG} under -p needs a prompt; workflow stopped. ` +
+          `Example: pi -p --${WORKFLOW_FILE_FLAG}=x.js "Report the result."\n`,
+      );
+    }
+    workflowRuns.clear();
+  };
 
   const resolveMention = (name: string) => manager.resolveMention(name);
 
@@ -851,7 +881,8 @@ export default function (pi: ExtensionAPI) {
           fleet.update();
         },
       }, collisionsState),
-      runWorkflowFlag: (c) => runWorkflowFlag(pi, c, manager, agentActivity, workflowTasks, widget, fleet, isWorkflowsEnabled, flagState, trackWorkflowRun),
+      runWorkflowFlag: (c) => runWorkflowFlag(pi, c, manager, agentActivity, workflowTasks, widget, fleet, outbox, isWorkflowsEnabled, flagState, trackWorkflowRun, () => sessionEnded),
+      onSessionTeardown,
       registerMentionProvider: (c) => registerMentionProvider(c, mentionHookDeps, mentionState),
       spawnTopLevel,
       ownsManagerRegistry,

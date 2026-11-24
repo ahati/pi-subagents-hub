@@ -72,7 +72,9 @@ describe("headless drain at agent_before_settle", () => {
     const context = ctx({ cwd: hermetic.dir, mode });
     await booted.lifecycle.get("session_start")({}, context);
     shutdown = () => booted.lifecycle.get("session_shutdown")({ reason: "quit" }, context);
-    return { booted, context, settle: () => booted.lifecycle.get("agent_before_settle")(settleEvent, context) };
+    const settle = (outcome = "completed") =>
+      booted.lifecycle.get("agent_before_settle")({ ...settleEvent, outcome }, context);
+    return { booted, context, settle };
   }
 
   async function spawnBackground(booted: ReturnType<typeof makePi>, context: any) {
@@ -97,6 +99,21 @@ describe("headless drain at agent_before_settle", () => {
 
     await expect(settle()).resolves.toBeUndefined();
     expect(record(id).status).toBe("running");
+    finish();
+  });
+
+  it.each(["error", "aborted"])("does not drain on a %s final turn, even with work pending", async (outcome) => {
+    const finish = heldRun();
+    const { booted, context, settle } = await boot("print");
+    await spawnBackground(booted, context);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    // Settles without waiting or forcing a turn: a failed/aborted run is one pi
+    // is tearing down, as CompletionOutbox.onTurnEnd treats the same outcomes.
+    const result = settle(outcome);
+    await flush();
+    expect(stderr.mock.calls.some(c => String(c[0]).includes("Waiting for background work"))).toBe(false);
+    await expect(result).resolves.toBeUndefined();
     finish();
   });
 
