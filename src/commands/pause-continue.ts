@@ -27,7 +27,7 @@ import { shadowToolsFactory } from "../shadow-tools.js";
 import type { AgentRecord, AgentTombstone } from "../types.js";
 import type { AgentActivity } from "../ui/agent-widget.js";
 import { pauseWorkflowTask, resumeWorkflowTask, type WorkflowTask } from "../workflow/task.js";
-import { type ParkGateController, pauseOwnedBackgroundChildren, recordName } from "./pause-state.js";
+import { type ParkGateController, pauseOwnedChildren, recordName } from "./pause-state.js";
 
 const MANAGER_KEY = Symbol.for("pi-subagents:manager");
 const NO_MAIN_TURN_CLAIM_PID = -1;
@@ -151,7 +151,7 @@ export function pauseAgentRecord(
         ? "worktree-isolated runs cannot pause"
         : undefined;
   if (refusal || !manager.pause(record.id)) return refusal ?? "not pausable";
-  pauseOwnedBackgroundChildren(record.id, manager);
+  pauseOwnedChildren(record.id, manager);
   pi.events.emit("subagents:paused", {
     id: record.id,
     type: record.type,
@@ -180,6 +180,10 @@ export function pauseAgentAndSync(
 
 /** A nested record that must survive a restart with its paused ancestor. */
 function isParkableWithParent(record: AgentRecord, park: ParkGateController): boolean {
+  // A foreground child's recovery unit is its parent's transcript: its spawn
+  // call is the parked parent's pending call, healed on the parent's resume —
+  // a row here would revive it beside the healed call's own child.
+  if (record.isBackground === false) return false;
   if (record.status === "paused") return true;
   // A running background child would be lost on quit; park its transcript too.
   return record.isBackground === true &&
@@ -275,12 +279,50 @@ export async function pauseAllCommand(
   const { pi, manager, park, workflowTasks } = deps;
   if (!ctx.isIdle()) {
     if (park.armedPause) {
+      // Cancel: undo the arm's park, so the tree runs again and the boundary
+      // the arm was waiting for lands nothing.
       park.armedPause = false;
-      ctx.ui.notify("Pause cancelled.", "info");
+      const parkedIds = park.armedPaused;
+      park.armedPaused = [];
+      let resumedCount = 0;
+      for (const id of parkedIds) {
+        const record = manager.getRecord(id);
+        if (record?.status !== "paused") continue;
+        if (await resumeAgentById(ctx, record, deps)) resumedCount++;
+      }
+      syncPauseManifest(ctx, park, manager, workflowTasks);
+      deps.widget?.update();
+      deps.fleet?.update();
+      const disarmParts = ["Pause cancelled"];
+      if (resumedCount > 0) disarmParts.push(`resumed ${resumedCount} agent${resumedCount === 1 ? "" : "s"}`);
+      ctx.ui.notify(disarmParts.join(" — ") + ".", "info");
       return;
     }
+    // Arm, and park the tree at once: a child suspends at its own boundary,
+    // which is seconds away, while the main turn's boundary can be minutes
+    // out (a long generation, a long in-flight tool call). Only the main-turn
+    // park stays deferred to the turn's next boundary.
     park.armedPause = true;
-    ctx.ui.notify("Pausing when the turn reaches its next boundary — /pause again to cancel.", "info");
+    let parked = 0;
+    const refused: string[] = [];
+    for (const record of manager.listAgents().filter(isTopLevelAgent)) {
+      if (record.status !== "running" && record.status !== "queued") continue;
+      const refusal = pauseAgentRecord(record, pi, manager);
+      if (refusal !== undefined) {
+        refused.push(`@${recordName(record)} (${refusal})`);
+        continue;
+      }
+      park.armedPaused.push(record.id);
+      parked++;
+    }
+    syncPauseManifest(ctx, park, manager, workflowTasks);
+    deps.widget?.update();
+    deps.fleet?.update();
+    const armParts: string[] = [];
+    if (parked > 0) armParts.push(`Parked ${parked} agent${parked === 1 ? "" : "s"}`);
+    if (refused.length > 0) armParts.push(`skipped ${refused.join(", ")}`);
+    armParts.push("the main turn parks at its next boundary — /pause again to cancel");
+    ctx.ui.notify(armParts.join("; ") + ".", "info");
     return;
   }
   const captured = park.captureSettledResults(ctx, manager, c => syncPauseManifest(c, park, manager, workflowTasks));
@@ -542,6 +584,13 @@ export async function continuePausedCommand(
   if (!sessionId) {
     ctx.ui.notify("No active session.", "warning");
     return;
+  }
+  // /continue cancels a still-armed main-turn park: the user asked to resume,
+  // so the boundary the arm is waiting for must land nothing later. The rows
+  // the arm wrote are resumed by the normal flow below.
+  if (park.armedPause) {
+    park.armedPause = false;
+    park.armedPaused = [];
   }
   const store = new PauseStore(resolvePauseManifestPath(ctx.cwd, sessionId));
   const entries = store.list();

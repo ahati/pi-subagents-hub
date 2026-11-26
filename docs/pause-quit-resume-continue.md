@@ -35,9 +35,11 @@ the first subagent-related call.
 
 ## 3. Non-goals
 
-- Pausing foreground agents a caller is blocked on, worktree-isolated
-  runs, or agents owned by another agent or a workflow (existing refusals
-  remain).
+- Pausing a *top-level* foreground agent the main turn is blocked on — its
+  call is in flight and runs to completion (FR-P4) — worktree-isolated runs,
+  or agents owned by another agent or a workflow (existing refusals remain).
+  A *parked parent's* foreground children are no longer exempt: they gate
+  with it (FR-P5).
 - Keeping a parked run alive across a crash (in-flight model streams are
   process-bound; the persisted transcript is the recovery surface).
 - Delivering results of agents the user already consumed before pausing.
@@ -52,8 +54,13 @@ the first subagent-related call.
   worktree-isolated runs are refused with a visible reason; owned agents are
   outside the park's selection, which addresses top-level agents.
 - **FR-P2 (streaming → armed)** With the main model producing output,
-  `/pause` arms the park instead of acting. Nothing is parked yet; a second
-  `/pause` cancels the arming.
+  `/pause` arms the main-turn park and parks the agent tree *at once*: every
+  active top-level agent and its owned children gate at their own next
+  boundary — seconds away, independent of the main turn — and the manifest is
+  written immediately, so quitting mid-arm loses nothing. Only the main-turn
+  park defers to the turn's next boundary (FR-P3). A second `/pause` cancels:
+  the arm is dropped and the records it parked are resumed. `/continue` while
+  armed disarms and resumes them through the ordinary flow.
 - **FR-P3 (landing)** The armed park lands at the first boundary after
   arming: **before the next not-yet-started tool call**, or — if the current
   message's tools are already executing or the message makes none — **before
@@ -63,10 +70,15 @@ the first subagent-related call.
   lands runs to completion and its output is persisted normally. It is
   never re-executed. Only calls that had not started are held.
 - **FR-P5 (scope)** The park includes every active top-level subagent and
-  the main turn. Refusals (foreground, worktree-isolated) are named in the
-  landing summary and excluded from the manifest; everything else parks.
-  Owned agents are not selected in the first place, so they are neither
-  parked nor named (FR-P1).
+  the main turn. A parked parent's owned children gate with it, **foreground
+  children included** — nothing under a parked parent runs while it is parked,
+  and `/continue` resumes the children first so their results unblock the
+  parent. Refusals (a top-level foreground agent the main turn is blocked on,
+  worktree-isolated runs) are named in the landing summary and excluded from
+  the manifest; everything else parks. A nested foreground child takes no
+  manifest row even though it parks: its recovery unit is its parent's
+  transcript — the parked parent's pending spawn call is healed on its
+  resume, and a row would revive the child beside the call's own.
 - **FR-P6 (cancel)** `/pause` while armed disarms. A later boundary then
   lands nothing.
 - **FR-P7 (Esc)** Pressing Esc while armed still lands the park (the user
@@ -157,10 +169,13 @@ Gates always race the run's abort signal. Esc must be able to release a
 parked gate — otherwise the session could never go idle again — and the
 release path closes the held call with an honest aborted result.
 
-The park lands at the earliest boundary after arming, which implements
-FR-P3/P4 exactly: pi reports each boundary only after the prior work is
-persisted, so a tool that was running finishes and its output lands in the
-session before the gate closes.
+The *agent* park lands at arm time: each agent's own session hooks carry
+its gate, so the tree suspends at its own boundaries — a long main-model
+generation or long in-flight main-turn call no longer keeps the tree running.
+The *main-turn* park lands at the earliest boundary after arming, which
+implements FR-P3/P4 exactly: pi reports each boundary only after the prior
+work is persisted, so a tool that was running finishes and its output lands
+in the session before the gate closes.
 
 A park also hands the run's concurrency slot back: a parked run is not
 running, and since paused records are exempt from the record GC nothing else

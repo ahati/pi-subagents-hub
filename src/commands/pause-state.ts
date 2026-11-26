@@ -22,18 +22,21 @@ export function recordName(record: AgentRecord): string {
 }
 
 /**
- * Pause every active background descendant of `parentId` recursively.
- * Does not emit top-level events or surface individual ownership refusals.
+ * Pause every active descendant of `parentId` recursively, background and
+ * foreground alike: a parked parent gates its whole tree, so nothing under it
+ * runs while it is parked (`/continue` resumes the children first, whose
+ * results then unblock the parent). Does not emit top-level events or surface
+ * individual ownership refusals.
  */
-export function pauseOwnedBackgroundChildren(parentId: string, manager: AgentManager): number {
+export function pauseOwnedChildren(parentId: string, manager: AgentManager): number {
   let paused = 0;
   const agents = manager.listAgents();
   for (const child of agents) {
     if (child.parentAgentId !== parentId || child.workflowId !== undefined) continue;
-    if ((child.status === "running" || child.status === "queued") && child.isBackground === true && !child.worktree) {
-      if (manager.pause(child.id)) paused++;
+    if ((child.status === "running" || child.status === "queued") && !child.worktree) {
+      if (manager.pause(child.id, { allowForeground: true })) paused++;
     }
-    paused += pauseOwnedBackgroundChildren(child.id, manager);
+    paused += pauseOwnedChildren(child.id, manager);
   }
   return paused;
 }
@@ -52,6 +55,8 @@ function nestedContextFields(
 
 export class ParkGateController {
   armedPause = false;
+  /** Top-level ids the armed /pause parked at once — what a cancel resumes. */
+  armedPaused: string[] = [];
   mainTurnSwitchInProgress = false;
   parkedMain = false;
   mainGate: { promise: Promise<void>; open(): void } | undefined;
@@ -82,6 +87,7 @@ export class ParkGateController {
 
   resetOnSessionStart(): void {
     this.armedPause = false;
+    this.armedPaused = [];
     this.mainTurnSwitchInProgress = false;
     this.openMainTurnGate();
     this.heldNudges.length = 0;
@@ -215,6 +221,7 @@ export class ParkGateController {
     const branch = ctx.sessionManager?.getBranch?.() ?? [];
     const pendingTools = branch.length > 0 ? countUnansweredToolCalls(branch) : boundaryCount;
     this.armedPause = false;
+    this.armedPaused = [];
     this.parkedMain = true;
     const captured = this.captureSettledResults(ctx, manager, syncPauseManifest);
     let paused = 0;

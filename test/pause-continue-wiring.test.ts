@@ -251,23 +251,24 @@ describe("/pause", () => {
     expect(manifest().list()).toEqual([]);
   });
 
-  it("arms while the main model is streaming instead of refusing", async () => {
+  it("arms while the main model is streaming instead of refusing, and parks the tree at once", async () => {
     const b = boot();
     const id = await spawnRunning(b, resumableSession);
 
     const { cmdCtx } = runCommand(b, "pause", "", { isIdle: () => false });
     await flush();
 
-    // The park lands at the main turn's next boundary, which never arrives in
-    // this test — so nothing is parked yet: the subagent keeps running and the
-    // manifest stays untouched.
-    expect(manager().getRecord(id).status).toBe("running");
-    expect(manifest().list()).toEqual([]);
+    // The arm parks the tree immediately — an agent suspends at its own
+    // boundary — while the main-turn park stays deferred to the turn's next
+    // boundary, which never arrives in this test.
+    expect(manager().getRecord(id).status).toBe("paused");
+    expect(manifest().list().map(e => e.id)).toEqual([id]);
     // A pause that only arms acknowledges, it does not refuse.
     const notifies = vi.mocked(cmdCtx.ui.notify).mock.calls.map(c => String(c[0]));
     expect(notifies.length).toBeGreaterThan(0);
     expect(notifies.some(t => t.includes("press Esc") || t.includes("before /pause"))).toBe(false);
-    expect(vi.mocked(b.pi.events.emit).mock.calls.filter(c => c[0] === "subagents:paused")).toEqual([]);
+    // The arm's park is a real park, so the pause event fired.
+    expect(vi.mocked(b.pi.events.emit).mock.calls.filter(c => c[0] === "subagents:paused")).toHaveLength(1);
   });
 
   it("reports when there is nothing active", async () => {
@@ -1310,6 +1311,45 @@ describe("pause manifest sync across surfaces and nested children", () => {
 
     expect(mgr.getRecord(parentId)?.status).toBe("running");
     expect(mgr.getRecord(childId)?.status).toBe("running");
+  });
+
+  it("gates a paused parent's foreground child too, and gives it no manifest row; /continue resumes both", async () => {
+    const b = boot();
+    await b.lifecycle.get("session_start")({ type: "session_start", reason: "startup" }, ctx());
+    const parentId = await spawnRunning(b, resumableSession, "parent agent");
+
+    // A nested child spawned inline: it blocks its parent's pending Agent
+    // call (isBackground false), as nested-tools spawns default to.
+    const mgr = manager().manager;
+    const fgChild = mgr.spawn(b.pi, ctx(), "Explore", "fg child work", {
+      description: "fg child",
+      isBackground: false,
+      parentAgentId: parentId,
+      depth: 2,
+    });
+    await flush();
+    expect(mgr.getRecord(fgChild)?.status).toBe("running");
+
+    const { cmdCtx } = runCommand(b, "pause");
+    await flush();
+
+    // The whole tree parks: the foreground child gates with its parent.
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith("Paused 1 agent.", "info");
+    expect(mgr.getRecord(parentId)?.status).toBe("paused");
+    expect(mgr.getRecord(fgChild)?.status).toBe("paused");
+
+    // The foreground child carries no manifest row: its recovery unit is its
+    // parent's transcript — the parked parent answers its pending spawn call
+    // on /continue, so a row would revive it twice.
+    expect(manifest().list().map(r => r.id)).toEqual([parentId]);
+
+    await runCommand(b, "continue").result;
+    await flush();
+    await flush();
+
+    expect(mgr.getRecord(parentId)?.status).toBe("running");
+    expect(mgr.getRecord(fgChild)?.status).toBe("running");
+    expect(manifest().list()).toEqual([]);
   });
 
   it("pauses and resumes nested background children alongside their paused parent, and restores them across restart", async () => {

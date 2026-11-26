@@ -13,7 +13,6 @@
  * only asserted to exist; the arming and disarming wording is pinned below,
  * since those two are the only strings the design specifies (§4.1 FR-P2).
  */
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -27,9 +26,14 @@ import subagentsExtension from "../src/index.js";
 import { PauseStore, resolvePauseStorePath } from "../src/pause-store.js";
 import { type BootedPi, ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
 
-/** Pinned /pause state toasts. */
-const ARM_TOAST = "Pausing when the turn reaches its next boundary — /pause again to cancel.";
-const DISARM_TOAST = "Pause cancelled.";
+/** Pinned /pause state toasts. The arm parks the active agents at once — a
+ * child's own boundary is seconds away, while the main turn's can be minutes
+ * out (a long generation, a long in-flight call) — and defers only the
+ * main-turn park to the turn's next boundary. */
+const ARM_TOAST = (n: number) =>
+  `Parked ${n} agent${n === 1 ? "" : "s"}; the main turn parks at its next boundary — /pause again to cancel.`;
+const DISARM_TOAST = (n: number) =>
+  n > 0 ? `Pause cancelled — resumed ${n} agent${n === 1 ? "" : "s"}.` : "Pause cancelled.";
 /** Today's refusal — the redesign replaces it with arming. */
 const OLD_REFUSAL = "Main model is streaming — press Esc (or let the turn finish) before /pause.";
 
@@ -215,7 +219,7 @@ async function arm(b: BootedPi) {
 }
 
 describe("/pause arming", () => {
-  it("arms instead of refusing when the main model is streaming", async () => {
+  it("arms and parks the active agents while the main model streams", async () => {
     const b = boot();
     const id = await spawnRunning(b, resumableSession);
 
@@ -223,21 +227,28 @@ describe("/pause arming", () => {
     await flush();
 
     expect(cmdCtx.ui.notify).not.toHaveBeenCalledWith(OLD_REFUSAL, "warning");
-    expect(cmdCtx.ui.notify).toHaveBeenCalledWith(ARM_TOAST, "info");
-    // Arming parks nothing: the subagents keep running until the boundary.
-    expect(manager().getRecord(id).status).toBe("running");
-    expect(manifest().list()).toEqual([]);
-    expect(existsSync(resolvePauseStorePath(process.cwd(), "s1"))).toBe(false);
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith(ARM_TOAST(1), "info");
+    // Arming parks the tree at once: an agent suspends at its own boundary,
+    // which does not wait for the main turn's.
+    expect(manager().getRecord(id).status).toBe("paused");
+    expect(manifest().list().map(e => e.id)).toEqual([id]);
+    // The main-turn park is what stays deferred: no mainTurn row yet.
+    expect(mainTurn()).toBeUndefined();
   });
 
-  it("a second /pause disarms, and a later boundary lands nothing", async () => {
+  it("a second /pause disarms and resumes what the arm parked; a later boundary lands nothing", async () => {
     const b = boot();
     const id = await spawnRunning(b, resumableSession);
     await arm(b);
 
     const { cmdCtx } = runCommand(b, "pause", "", { isIdle: () => false });
     await flush();
-    expect(cmdCtx.ui.notify).toHaveBeenCalledWith(DISARM_TOAST, "info");
+    await flush();
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith(DISARM_TOAST(1), "info");
+
+    // The arm's park is undone: the record runs again, the manifest is empty.
+    expect(manager().getRecord(id).status).toBe("running");
+    expect(manifest().list()).toEqual([]);
 
     // The boundary that would have landed the park is now a no-op.
     const landCtx = ctx({ isIdle: () => false });
@@ -245,6 +256,76 @@ describe("/pause arming", () => {
 
     expect(manager().getRecord(id).status).toBe("running");
     expect(mainTurn()).toBeUndefined();
+    expect(landCtx.ui.notify).not.toHaveBeenCalled();
+  });
+
+  it("parks the whole nested tree at once, foreground children included, without a manifest row for the foreground child", async () => {
+    const b = boot();
+    const parentId = await spawnRunning(b, resumableSession, "parent agent");
+    const mgr = manager().manager;
+    const bgChild = mgr.spawn(b.pi, ctx(), "Explore", "bg child work", {
+      description: "bg child",
+      isBackground: true,
+      parentAgentId: parentId,
+      depth: 2,
+    });
+    const fgChild = mgr.spawn(b.pi, ctx(), "Explore", "fg child work", {
+      description: "fg child",
+      isBackground: false,
+      parentAgentId: parentId,
+      depth: 2,
+    });
+    await flush();
+    expect(mgr.getRecord(bgChild).status).toBe("running");
+    expect(mgr.getRecord(fgChild).status).toBe("running");
+
+    const { cmdCtx } = runCommand(b, "pause", "", { isIdle: () => false });
+    await flush();
+
+    // Nothing in the tree runs while armed: background and foreground
+    // children alike gate at their own next boundary.
+    expect(mgr.getRecord(parentId).status).toBe("paused");
+    expect(mgr.getRecord(bgChild).status).toBe("paused");
+    expect(mgr.getRecord(fgChild).status).toBe("paused");
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith(ARM_TOAST(1), "info");
+
+    // The foreground child takes no manifest row: its recovery unit is its
+    // parent's transcript — the parent's parked turn holds the spawn call,
+    // and a revived parent answers that call rather than re-spawning it.
+    const rows = manifest().list();
+    expect(rows.map(r => r.id)).toEqual([parentId, bgChild]);
+  });
+
+  it("/continue while armed disarms and resumes the parked tree; a later boundary lands nothing", async () => {
+    const b = boot();
+    const parentId = await spawnRunning(b, resumableSession, "parent agent");
+    const mgr = manager().manager;
+    const fgChild = mgr.spawn(b.pi, ctx(), "Explore", "fg child work", {
+      description: "fg child",
+      isBackground: false,
+      parentAgentId: parentId,
+      depth: 2,
+    });
+    await flush();
+    await arm(b);
+    expect(mgr.getRecord(fgChild).status).toBe("paused");
+
+    // /continue resumes everything the arm parked — foreground child
+    // included — and cancels the deferred main-turn park.
+    const { cmdCtx } = runCommand(b, "continue");
+    await cmdCtx.result;
+    await flush();
+    await flush();
+
+    expect(mgr.getRecord(parentId).status).toBe("running");
+    expect(mgr.getRecord(fgChild).status).toBe("running");
+    expect(manifest().list()).toEqual([]);
+    expect(mainTurn()).toBeUndefined();
+
+    // The boundary that would have landed the park is now a no-op.
+    const landCtx = ctx({ isIdle: () => false });
+    await landBoundary(b.lifecycle.get("turn_end"), turnEnd(), landCtx);
+    expect(mgr.getRecord(parentId).status).toBe("running");
     expect(landCtx.ui.notify).not.toHaveBeenCalled();
   });
 });

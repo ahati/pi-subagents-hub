@@ -786,10 +786,17 @@ export class AgentManager {
     return true;
   }
 
-  pause(id: string): boolean {
+  /**
+   * Park a run at its next boundary. Foreground records refuse unless the
+   * caller parks with them (`allowForeground`) — the owned-children walk of a
+   * parked parent — because their caller is otherwise blocked on the very
+   * call this would freeze mid-flight.
+   */
+  pause(id: string, opts?: { allowForeground?: boolean }): boolean {
     const record = this.registry.agents.get(id);
     if (!record) return false;
-    if (this.startups.has(id) || record.worktree || record.isBackground === false) return false;
+    if (this.startups.has(id) || record.worktree) return false;
+    if (record.isBackground === false && !opts?.allowForeground) return false;
 
     if (record.status === "queued") {
       const i = this.pool.queue.findIndex(e => e.id === id);

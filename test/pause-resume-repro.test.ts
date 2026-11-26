@@ -303,15 +303,19 @@ describe("REPRO: quit while the park is still armed (nothing landed yet)", () =>
     seedParentWithPendingToolCall();
     const id = await spawnRunningChild(b1, childFile);
 
-    // /pause while the main model streams → ARMED (nothing written yet).
+    // /pause while the main model streams → ARMED, and the tree parks at
+    // once: the subagent row is written immediately, so a quit mid-arm loses
+    // nothing. Only the main-turn park is still unwritten.
     const armCtx = parentCtx({ isIdle: () => false });
     await b1.commands.get("pause").handler("", armCtx);
     await flush();
     const sid = parentSm!.getSessionId();
-    expect(new PauseStore(resolvePauseStorePath(hermetic!.dir, sid)).list()).toEqual([]);
+    const armedStore = new PauseStore(resolvePauseStorePath(hermetic!.dir, sid));
+    expect(armedStore.list().map(e => e.id)).toEqual([id]);
+    expect(armedStore.getMainTurn()).toBeUndefined();
 
-    // Quit BEFORE the boundary lands: shutdown must land the armed park
-    // best-effort — the subagent entry and the parked main turn both written.
+    // Quit BEFORE the boundary lands: shutdown must land the armed main-turn
+    // park best-effort — the entry and the parked main turn both written.
     await booted?.get("session_shutdown")?.({ type: "session_shutdown" }, parentCtx());
     booted = undefined;
 
