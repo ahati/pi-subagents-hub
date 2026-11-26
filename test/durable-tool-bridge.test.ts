@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { defineTool, type TaskId, type ToolPark, type ToolRegistration } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
 import { bridgeDurableTool, bridgePiToolToDurableTool, type ExecutablePiTool } from "../src/runner/durable-tool-bridge.js";
 
@@ -298,7 +298,8 @@ describe("bridgeDurableTool", () => {
 
 describe("bridgeDurableTool full result contract", () => {
   it("propagates a ToolPark untouched, without firing end hooks", async () => {
-    const park = { sleep: { until: 1234, checkpoint: { phase: 1 } } };
+    // A pi-durable 1.6.1 park: tagged `kind`, flat fields — a result has no `kind`.
+    const park: ToolPark = { kind: "sleep", until: 1234, checkpoint: { phase: 1 } };
     const mockParkingTool: ToolRegistration = defineTool({
       name: "wait_for_signal",
       description: "Park until a signal arrives",
@@ -333,6 +334,33 @@ describe("bridgeDurableTool full result contract", () => {
     ]);
   });
 
+  it("describes a wait park by the tasks it waits for", async () => {
+    const park: ToolPark = { kind: "wait", on: [1, 2] as TaskId[], policy: "any" };
+    const mockParkingTool: ToolRegistration = defineTool({
+      name: "wait_for_tasks",
+      description: "Park until owned tasks settle",
+      parameters: {},
+      replay: "safe",
+      async execute() {
+        return park;
+      },
+    });
+
+    const updates: Array<{ partialResult: any }> = [];
+    const bridged = bridgeDurableTool(mockParkingTool, {
+      onToolUpdate: (info) => updates.push(info),
+    });
+
+    const res = await bridged.execute({}, { output: vi.fn(), callId: "park-3" } as any, BACKGROUND_CONTEXT);
+
+    // The park flows through untouched, with one status line naming the wait.
+    expect(res).toBe(park);
+    expect(updates).toHaveLength(1);
+    expect(updates[0].partialResult.content).toEqual([
+      { type: "text", text: "parked — waiting for 2 tasks to settle" },
+    ]);
+  });
+
   it("keeps streamed output above the park note and names watched signals", async () => {
     const mockParkingTool: ToolRegistration = defineTool({
       name: "wait_for_approval",
@@ -341,7 +369,7 @@ describe("bridgeDurableTool full result contract", () => {
       replay: "safe",
       async execute(_args: any, api: any) {
         api.output("draft ready");
-        return { sleep: { signals: [{ signal: "approval", key: "pr-7" }] } };
+        return { kind: "sleep", signals: [{ signal: "approval", key: "pr-7" }] };
       },
     });
 

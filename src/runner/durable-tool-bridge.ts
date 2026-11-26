@@ -67,13 +67,14 @@ interface ToolExecutionCoreParams {
 
 /**
  * A park is not a result: pi-durable re-runs `execute()` once the call wakes, so
- * it must flow back untouched instead of gaining an `output`. Results declare
- * `sleep`/`wait` as `never`; only a park carries either as an object.
+ * it must flow back untouched instead of gaining an `output`. Since pi-durable
+ * 1.6.1 a park is tagged — `{ kind: "sleep" | "wait", ... }`, fields flat — and
+ * a result has no `kind`; `kind` is the discriminator.
  */
 function isToolPark(value: unknown): value is ToolPark {
   if (typeof value !== "object" || value === null) return false;
-  const { sleep, wait } = value as { sleep?: unknown; wait?: unknown };
-  return (typeof sleep === "object" && sleep !== null) || (typeof wait === "object" && wait !== null);
+  const { kind } = value as { kind?: unknown };
+  return kind === "sleep" || kind === "wait";
 }
 
 /**
@@ -81,12 +82,12 @@ function isToolPark(value: unknown): value is ToolPark {
  * wakes — a suspended call is otherwise indistinguishable from a hung one.
  */
 function parkNote(park: ToolPark): string {
-  if (park.wait) {
-    const n = park.wait.on.length;
+  if (park.kind === "wait") {
+    const n = park.on.length;
     return `parked — waiting for ${n} task${n === 1 ? "" : "s"} to settle`;
   }
-  const until = park.sleep?.until !== undefined ? ` until ${new Date(park.sleep.until).toLocaleTimeString()}` : "";
-  const signals = park.sleep?.signals?.length ? ` for ${park.sleep.signals.map((s) => s.signal).join(", ")}` : "";
+  const until = park.until !== undefined ? ` until ${new Date(park.until).toLocaleTimeString()}` : "";
+  const signals = park.signals?.length ? ` for ${park.signals.map((s) => s.signal).join(", ")}` : "";
   return `parked${until}${signals} — the call resumes on wake`;
 }
 

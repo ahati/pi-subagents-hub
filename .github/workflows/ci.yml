@@ -21,13 +21,14 @@ jobs:
       - run: npm run test
       - run: npm run build
 
-  # The extension compiles against the 1.6.0 Pi API baseline (readonly render
-  # output, pi-durable ToolPark) and does not keep backward compatibility with
-  # older pi. The peer dependency floor is therefore 1.6.0, matching the tested
-  # dev baseline. pi-agent-core is pinned alongside the other three so the floor
-  # tree stays single-version — a mixed top-level/nested pi-agent-core splits
-  # branded types (AgentMessage, AgentSession) across copies and fails falsely.
-  # Keep this job strict so the advertised minimum remains an executable promise.
+  # The extension compiles against the 1.6.1 Pi API baseline (readonly render
+  # output, pi-durable 1.6.1's tagged ToolPark) and does not keep backward
+  # compatibility with older pi. The peer dependency floor is therefore 1.6.1,
+  # matching the tested dev baseline. pi-agent-core is pinned alongside the
+  # other three so the floor tree stays single-version — a mixed
+  # top-level/nested pi-agent-core splits branded types (AgentMessage,
+  # AgentSession) across copies and fails falsely. Keep this job strict so the
+  # advertised minimum remains an executable promise.
   compat-floor-pi:
     runs-on: ubuntu-24.04
     steps:
@@ -38,13 +39,13 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Install floor Pi
-        run: npm install --no-save @earendil-works/pi-coding-agent@1.6.0 @earendil-works/pi-agent-core@1.6.0 @earendil-works/pi-ai@1.6.0 @earendil-works/pi-tui@1.6.0
+        run: npm install --no-save @earendil-works/pi-coding-agent@1.6.1 @earendil-works/pi-agent-core@1.6.1 @earendil-works/pi-ai@1.6.1 @earendil-works/pi-tui@1.6.1
       - name: Typecheck against floor Pi
         run: npm run typecheck
       - name: Test suite against floor Pi
         run: npx vitest run --reporter=dot
 
-  # Forward canary: reinstall whatever Pi is `latest` over the 1.6.0 floor, so a release
+  # Forward canary: reinstall whatever Pi is `latest` over the 1.6.1 floor, so a release
   # newer than the tested baseline surfaces here before it reaches users. It runs the full
   # typecheck + suite, not a hand-picked file list, so new drift can't hide in a test nobody
   # remembered to add here. This remains a non-blocking canary.

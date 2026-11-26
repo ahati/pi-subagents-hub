@@ -106,7 +106,7 @@ Or load directly for development:
 pi -e ./src/index.ts
 ```
 
-Requires pi **1.6.0 or newer**: the extension compiles against the 1.6 API baseline (readonly `render()` output, pi-durable `ToolPark`). The `peerDependencies` range declares this minimum, so npm flags an older pi at install time.
+Requires pi **1.6.1 or newer**: the extension compiles against the 1.6.1 API baseline (readonly `render()` output, pi-durable 1.6.1's tagged `ToolPark` — `{ kind: "sleep" | "wait", … }` flat, with `kind` as the park/result discriminator). The `peerDependencies` range declares this minimum, so npm flags an older pi at install time.
 
 ### Other hosts
 
