@@ -57,7 +57,9 @@ the first subagent-related call.
   `/pause` arms the main-turn park and parks the agent tree *at once*: every
   active top-level agent and its owned children gate at their own next
   boundary — seconds away, independent of the main turn — and the manifest is
-  written immediately, so quitting mid-arm loses nothing. Only the main-turn
+  written immediately, so quitting mid-arm is as safe as quitting after the
+  main-turn park. Records with no session file are reported at arm time, since
+  they are already parked when the landing summary walks. Only the main-turn
   park defers to the turn's next boundary (FR-P3). A second `/pause` cancels:
   the arm is dropped and the records it parked are resumed. `/continue` while
   armed disarms and resumes them through the ordinary flow.
@@ -72,13 +74,20 @@ the first subagent-related call.
 - **FR-P5 (scope)** The park includes every active top-level subagent and
   the main turn. A parked parent's owned children gate with it, **foreground
   children included** — nothing under a parked parent runs while it is parked,
-  and `/continue` resumes the children first so their results unblock the
-  parent. Refusals (a top-level foreground agent the main turn is blocked on,
+  and `/continue` resumes them too, so their results unblock the parent.
+  Refusals (a top-level foreground agent the main turn is blocked on,
   worktree-isolated runs) are named in the landing summary and excluded from
-  the manifest; everything else parks. A nested foreground child takes no
+  the manifest; everything else parks. The walk descends only into a child that
+  is parked, so every parked descendant has a parked parent to justify its
+  manifest row and its place in the resume walk — which is why a
+  worktree-isolated run keeps its own subtree running. A nested foreground
+  child takes no
   manifest row even though it parks: its recovery unit is its parent's
   transcript — the parked parent's pending spawn call is healed on its
-  resume, and a row would revive the child beside the call's own.
+  resume, and a row would revive the child beside the call's own. In session
+  that keeps the child's transcript (its gate reopens). After a restart it
+  does not: with no row there is no session file to continue from, so the
+  healed call runs the child again from scratch (see §7).
 - **FR-P6 (cancel)** `/pause` while armed disarms. A later boundary then
   lands nothing.
 - **FR-P7 (Esc)** Pressing Esc while armed still lands the park (the user
@@ -352,6 +361,39 @@ real sessions and the real resume flow.
   that one turn; a provider error appears as an error turn in the adopted
   transcript.
 - Input typed while parked is lost on quit (pi-native queueing behaviour).
+- An agent's foreground nested child is resumed from its own transcript only
+  in session. Parked, quit, and continued after a restart, the child has no
+  manifest row (a row would revive it beside the call that heals it), so the
+  parent's healed call runs it again from scratch: the child's earlier
+  transcript and tool state are gone, exactly as for a `persist_session: false`
+  run.
+
+  Closing that gap means letting the healed call be the resurrection point,
+  not reviving the child separately: a nested spawn records its `toolCallId`
+  on the child's record (only top-level records carry it today), a paused
+  foreground child gets a manifest row carrying that call id *and* its session
+  file, and `continuePausedEntry` — the single funnel every parent revival goes
+  through — lifts those rows into an in-memory map of parent id → call id → row
+  instead of reviving them, on the outcomes that start the parent
+  (`resumed`/`respawned`). A `failed` parent keeps its child rows for the next
+  attempt, so they must travel with it through the `replace*` rewrite; a
+  `stale` parent row is dropped, and its child rows go with it. The nested
+  `Agent` tool then finds the entry for the
+  call it is executing and spawns the child from that session file, bare and
+  promptless as `resumeNestedEntry` does, instead of from scratch. Two
+  constraints make the row itself the wrong carrier: `/continue` rewrites the
+  manifest without the failed and undelivered rows right as the parent's
+  continuation starts, and inside the nested tool `ctx` names the parent's
+  session, not the session whose manifest holds the row. The lift lives for the
+  process, so a second quit before the call claims it falls back to
+  from-scratch. Ordering rules out the
+  other alternative — the child cannot be revived ahead of the parent's
+  continuation, because that continuation runs inside the parent's own revival
+  and may re-spawn the child at any depth, so the call has to own the decision.
+  That alternative ends with a new child record id as well — background
+  children revived from rows get a fresh id too.
+- A worktree-isolated run refuses to pause, and its own descendants keep running
+  with it (FR-P5): parking one under a running owner would leave it unreachable.
 - A respawned agent starts a new conversation: the earlier transcript, tool
   state, structured-output schema, group/join membership and usage history
   are not restored. Model, thinking, max turns and isolation are replayed

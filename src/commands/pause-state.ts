@@ -24,18 +24,23 @@ export function recordName(record: AgentRecord): string {
 /**
  * Pause every active descendant of `parentId` recursively, background and
  * foreground alike: a parked parent gates its whole tree, so nothing under it
- * runs while it is parked (`/continue` resumes the children first, whose
- * results then unblock the parent). Does not emit top-level events or surface
- * individual ownership refusals.
+ * runs while it is parked (`/continue` resumes the children too, whose results
+ * then unblock the parent). The walk descends only into a child that is parked
+ * now — by this call or already: a descendant parked under a running owner
+ * would take no manifest row (its parent is not parked) and no resume walk
+ * would reach it, so a worktree-isolated child's subtree keeps running with it
+ * and a settled child's descendants are left alone. Does not emit top-level
+ * events or surface individual ownership refusals.
  */
 export function pauseOwnedChildren(parentId: string, manager: AgentManager): number {
   let paused = 0;
   const agents = manager.listAgents();
   for (const child of agents) {
     if (child.parentAgentId !== parentId || child.workflowId !== undefined) continue;
-    if ((child.status === "running" || child.status === "queued") && !child.worktree) {
-      if (manager.pause(child.id, { allowForeground: true })) paused++;
+    if ((child.status === "running" || child.status === "queued") && manager.pause(child.id, { allowForeground: true })) {
+      paused++;
     }
+    if (child.status !== "paused") continue;
     paused += pauseOwnedChildren(child.id, manager);
   }
   return paused;

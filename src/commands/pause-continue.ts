@@ -182,7 +182,12 @@ export function pauseAgentAndSync(
 function isParkableWithParent(record: AgentRecord, park: ParkGateController): boolean {
   // A foreground child's recovery unit is its parent's transcript: its spawn
   // call is the parked parent's pending call, healed on the parent's resume —
-  // a row here would revive it beside the healed call's own child.
+  // a row here would revive it beside the healed call's own child. The cost is
+  // that after a restart there is no session file to continue from, so the
+  // healed call runs the child again from scratch; in session its gate reopens
+  // and its transcript stands. Stated in
+  // docs/pause-quit-resume-continue.md (FR-P5, §7) — read the plan there
+  // before giving this a row.
   if (record.isBackground === false) return false;
   if (record.status === "paused") return true;
   // A running background child would be lost on quit; park its transcript too.
@@ -304,6 +309,8 @@ export async function pauseAllCommand(
     // park stays deferred to the turn's next boundary.
     park.armedPause = true;
     let parked = 0;
+    let ephemeral = 0;
+    let lost = 0;
     const refused: string[] = [];
     for (const record of manager.listAgents().filter(isTopLevelAgent)) {
       if (record.status !== "running" && record.status !== "queued") continue;
@@ -314,15 +321,26 @@ export async function pauseAllCommand(
       }
       park.armedPaused.push(record.id);
       parked++;
+      // Same accounting as the landing summary: a record with no session file
+      // is re-run from scratch by /continue, and one with neither a session nor
+      // a respawn recipe is gone on quit. The arm parks it now, so the landing
+      // walk no longer sees it — the warning has to be given here.
+      if (!record.sessionFile) {
+        if (park.respawnSpecFor(record)) ephemeral++;
+        else lost++;
+      }
     }
     syncPauseManifest(ctx, park, manager, workflowTasks);
     deps.widget?.update();
     deps.fleet?.update();
     const armParts: string[] = [];
     if (parked > 0) armParts.push(`Parked ${parked} agent${parked === 1 ? "" : "s"}`);
+    if (ephemeral > 0) armParts.push(`${ephemeral} with no session — /continue re-runs ${ephemeral === 1 ? "it" : "them"} from scratch`);
+    if (lost > 0) armParts.push(`${lost} without a persisted session — quitting loses ${lost === 1 ? "it" : "them"}`);
     if (refused.length > 0) armParts.push(`skipped ${refused.join(", ")}`);
     armParts.push("the main turn parks at its next boundary — /pause again to cancel");
-    ctx.ui.notify(armParts.join("; ") + ".", "info");
+    const armed = armParts.join("; ");
+    ctx.ui.notify(armed.charAt(0).toUpperCase() + armed.slice(1) + ".", "info");
     return;
   }
   const captured = park.captureSettledResults(ctx, manager, c => syncPauseManifest(c, park, manager, workflowTasks));

@@ -1352,6 +1352,40 @@ describe("pause manifest sync across surfaces and nested children", () => {
     expect(manifest().list()).toEqual([]);
   });
 
+  it("leaves a worktree child's subtree running with it, since a parked descendant below a running owner cannot be resumed", async () => {
+    const b = boot();
+    await b.lifecycle.get("session_start")({ type: "session_start", reason: "startup" }, ctx());
+    const parentId = await spawnRunning(b, resumableSession, "parent agent");
+    const mgr = manager().manager;
+    const wtChild = mgr.spawn(b.pi, ctx(), "Explore", "wt child work", {
+      description: "wt child",
+      isBackground: true,
+      parentAgentId: parentId,
+      depth: 2,
+    });
+    const grandchild = mgr.spawn(b.pi, ctx(), "Explore", "grandchild work", {
+      description: "grandchild",
+      isBackground: false,
+      parentAgentId: wtChild,
+      depth: 3,
+    });
+    await flush();
+    // getRecord hands back the live record, so the walk sees this flag from now
+    // on and treats the record as unpausable.
+    mgr.getRecord(wtChild)!.worktree = { path: "/tmp/wt" } as any;
+
+    await runCommand(b, "pause");
+    await flush();
+
+    // The worktree child refuses the park, and its subtree goes with it: a park
+    // below a running owner would take no manifest row (its parent is not
+    // parked) and no resume walk would reach it.
+    expect(mgr.getRecord(parentId)?.status).toBe("paused");
+    expect(mgr.getRecord(wtChild)?.status).toBe("running");
+    expect(mgr.getRecord(grandchild)?.status).toBe("running");
+    expect(manifest().list().map(r => r.id)).toEqual([parentId]);
+  });
+
   it("pauses and resumes nested background children alongside their paused parent, and restores them across restart", async () => {
     const b = boot();
     await b.lifecycle.get("session_start")({ type: "session_start", reason: "startup" }, ctx());

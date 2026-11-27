@@ -236,6 +236,36 @@ describe("/pause arming", () => {
     expect(mainTurn()).toBeUndefined();
   });
 
+  it("arming with nothing active still says what the arm is waiting for", async () => {
+    const b = boot();
+
+    const { cmdCtx } = runCommand(b, "pause", "", { isIdle: () => false });
+    await flush();
+
+    // No parked count to lead with: the sentence starts on the deferred park.
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith(
+      "The main turn parks at its next boundary — /pause again to cancel.",
+      "info",
+    );
+  });
+
+  it("arming a session-less agent reports that /continue re-runs it from scratch", async () => {
+    const b = boot();
+    // A session with no file: the arm parks it now, so the landing summary —
+    // which counts only records it paused itself — can never report it again.
+    const sessionless = () => ({ ...resumableSession(), sessionManager: {} }) as any;
+    const id = await spawnRunning(b, sessionless);
+    expect(manager().getRecord(id).sessionFile).toBeUndefined();
+
+    const { cmdCtx } = runCommand(b, "pause", "", { isIdle: () => false });
+    await flush();
+
+    expect(cmdCtx.ui.notify).toHaveBeenCalledWith(
+      "Parked 1 agent; 1 with no session — /continue re-runs it from scratch; the main turn parks at its next boundary — /pause again to cancel.",
+      "info",
+    );
+  });
+
   it("a second /pause disarms and resumes what the arm parked; a later boundary lands nothing", async () => {
     const b = boot();
     const id = await spawnRunning(b, resumableSession);
