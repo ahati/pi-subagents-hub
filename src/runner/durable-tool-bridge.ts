@@ -69,12 +69,12 @@ interface ToolExecutionCoreParams {
  * A park is not a result: pi-durable re-runs `execute()` once the call wakes, so
  * it must flow back untouched instead of gaining an `output`. Since pi-durable
  * 1.6.1 a park is tagged — `{ kind: "sleep" | "wait", ... }`, fields flat — and
- * a result has no `kind`; `kind` is the discriminator.
+ * a result has no `kind`; `kind` is the discriminator. Any `kind` counts, as the
+ * harness's own `isPark` decides: the bridge must not shape a park it does not
+ * recognize into a result, which would hide the harness's `invalid_park`.
  */
 function isToolPark(value: unknown): value is ToolPark {
-  if (typeof value !== "object" || value === null) return false;
-  const { kind } = value as { kind?: unknown };
-  return kind === "sleep" || kind === "wait";
+  return typeof value === "object" && value !== null && (value as { kind?: unknown }).kind !== undefined;
 }
 
 /**
