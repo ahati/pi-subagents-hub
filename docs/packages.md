@@ -128,7 +128,7 @@ Lowest to highest:
 |---|---|
 | 1 (lowest) | Built-in agents (`general-purpose`, `Explore`, `Plan`) |
 | 2 | Installed pi packages |
-| 3 | `$PI_CODING_AGENT_DIR/agents/*.md` (global) |
+| 3 | `$PI_CODING_AGENT_DIR/agents/*.md` (global; `PI_CODING_AGENT_DIR` or `--agent-dir`) |
 | 4 | `.agents/agents/*.md` (project workspace) |
 | 5 (highest) | `.pi/agents/*.md` (project) |
 

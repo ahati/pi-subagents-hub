@@ -317,7 +317,7 @@ Agents are discovered from four locations (higher priority wins):
 | 3 | `$PI_CODING_AGENT_DIR/agents/<name>.md` (default `~/.pi/agent/agents/<name>.md`) | Global — available everywhere |
 | 4 (lowest) | Paths declared by an installed pi package | Package — see [Shipping agents in a pi package](#shipping-agents-in-a-pi-package) |
 
-Project-level agents override global ones with the same name, so you can customize a global agent for a specific project. If both project locations define the same name, **`.pi/agents/` wins** — `.pi` stays the project authority; `.agents/agents/` is an additional read location for projects that keep their agent assets in the `.agents` workspace. The global location follows the upstream `PI_CODING_AGENT_DIR` env var — set it to relocate all pi-coding-agent state (agents, skills, settings) to a custom directory. An agent's name is its frontmatter `name:`, falling back to the filename, so two files can now claim the same one — the later load wins, and the warning below names the file that took over.
+Project-level agents override global ones with the same name, so you can customize a global agent for a specific project. If both project locations define the same name, **`.pi/agents/` wins** — `.pi` stays the project authority; `.agents/agents/` is an additional read location for projects that keep their agent assets in the `.agents` workspace. The global location follows the upstream `PI_CODING_AGENT_DIR` env var — set it, or start pi with `--agent-dir <dir>` (pi 1.7.0's command-line form of the same variable), to relocate all pi-coding-agent state (agents, skills, settings) to a custom directory. Subagent sessions read the same directory. An agent's name is its frontmatter `name:`, falling back to the filename, so two files can now claim the same one — the later load wins, and the warning below names the file that took over.
 
 An unreadable or unparseable agent file is skipped, not fatal — a warning names the file and the error. If it was overriding a same-named agent, a second line names the file that loads instead. Set `strictAgentFiles: true` in `subagents.json` (or `/agents → Settings → Strict agent files`) to fail startup on a broken file instead; mid-session reloads still only warn.
 
@@ -1059,7 +1059,7 @@ memory: project   # project | local | user
 |-------|----------|----------|
 | `project` | `.pi/agent-memory/<name>/` | Shared across the team (committed) |
 | `local` | `.pi/agent-memory-local/<name>/` | Machine-specific (gitignored) |
-| `user` | `<agentDir>/agent-memory/<name>/` (default `~/.pi/agent/agent-memory/`, honors `PI_CODING_AGENT_DIR`) | Global personal memory |
+| `user` | `<agentDir>/agent-memory/<name>/` (default `~/.pi/agent/agent-memory/`, honors `PI_CODING_AGENT_DIR` and `--agent-dir`) | Global personal memory |
 
 The `user` scope previously hardcoded `~/.pi/agent-memory/`. If that legacy directory exists for an agent and the new location doesn't, it keeps being used — existing memories aren't orphaned.
 
